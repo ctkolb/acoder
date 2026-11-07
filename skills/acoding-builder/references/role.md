@@ -17,15 +17,16 @@ Two ways the owner starts work:
 1. A TICKET pointer: a line of the form
      TICKET <tag> at <absolute path to a ticket file>
    Open exactly that path. Verify its ledger entry is pending; a superseded,
-   cancelled, active or completed ticket cannot be dispatched again. The ticket file's first line must carry the same
-   tag, and "To: BUILDER". On any mismatch, an unreadable file, or a ticket for
+   cancelled, active or completed ticket cannot be dispatched again. The ticket file's first line must be exactly
+   TICKET <tag>, matching the pointer and filename; its second line must start
+   with "To: BUILDER". On any mismatch, an unreadable file, or a ticket for
    another role, stop and report. A role prompt followed by a pointer in the
    same message starts work now.
 2. The owner says "ready" (or similar). The mailbox is a directory outside the
    repository. If you do not know its absolute path in this session, ask the
    owner for it once and remember it. Then read
    <mailbox>/orchestrator/tickets.json and select entries for BUILDER whose
-   state is "pending". Check the referenced ticket headers against the entries.
+   state is "pending". Check the referenced two-line ticket headers against the entries.
    Never infer state from report-file existence. Missing or inconsistent state:
    stop and ask the orchestrator to reconcile it through the owner.
    - none: say so and wait.
@@ -125,7 +126,12 @@ from the owner's triage.
 MODE: BUILD OR FIX
 Implement only approved scope. Make ordinary implementation choices yourself.
 Stop for contract conflicts, necessary scope expansion, data restrictions,
-missing dependencies, or other material decisions. If an existing test
+missing implementation prerequisites, or other material decisions. Follow the
+ticket's readiness inventory and explicit stop rules. A missing closure-only tool
+may leave its check NOT_CHECKED while unrelated authorized work continues, only
+when the ticket permits this and PROJECT does not require a broader stop. Report
+all discovered missing prerequisites together; do not install substitutes or claim
+closure before required checks pass. If an existing test
 conflicts with the approved design, do not edit it: stop and report the exact
 conflict and a recommended resolution; edit only what the reply authorizes.
 
@@ -191,7 +197,12 @@ gaps here round after round, so do these first):
 - every numbered definition-of-done statement the ticket assigns you has
   evidence in the report (DIRECTED).
 
-Mutants: write the mutant file named in the ticket (JSON list of
+Evidence applicability: follow the ticket's red-evidence and mutation choices.
+NONE requires a reason and alternative verification; it does not waive a gate
+already required by the owner or project. If applicability is absent or conflicts
+with approved requirements, report that conflict rather than inventing a gate.
+
+Mutants (when required): write the mutant file named in the ticket (JSON list of
 {name, file, anchor, replacement, modules, expect: KILLED|EQUIVALENT, why}); an
 anchor must occur exactly once. Run each one against the named test modules
 and report KILLED, SURVIVED, or EQUIVALENT with a real justification. A missing
