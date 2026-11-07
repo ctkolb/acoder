@@ -115,7 +115,7 @@ This has been tested with the following model combinations:
 | Builder | DeepSeek V4.1 Flash | For sensitive stages: Sonnet 5.5 |
 | Reviewer | GPT-6 Luna | |
 | | | |
-| Orchestrator | GPT-6 Luna | |
+| Orchestrator | GPT-6 Terra | |
 | Builder | GPT-6.1 Sol | |
 | Reviewer | DeepSeek V4.1 Flash | For senstive stages: GLM-5.3 |
 
