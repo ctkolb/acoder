@@ -1,0 +1,104 @@
+{
+  "session": "demo-S1-R-CODE-r3",
+  "stage": "S1",
+  "reviewed_commit": "3333333333333333333333333333333333333333",
+  "reviewed_exports": [
+    {
+      "role": "tip",
+      "path": "<mailbox>/checkouts/S1-tip",
+      "sha": "3333333333333333333333333333333333333333"
+    },
+    {
+      "role": "base",
+      "path": "<mailbox>/checkouts/S1-base",
+      "sha": "1111111111111111111111111111111111111111"
+    }
+  ],
+  "mode": "CODE",
+  "verdict": "READY",
+  "coverage": [
+    {
+      "attack": "1",
+      "stage": "S1",
+      "result": "PASS",
+      "depth": "executed",
+      "evidence": "<scratch>/review.txt"
+    },
+    {
+      "attack": "2",
+      "stage": "S1",
+      "result": "PASS",
+      "depth": "executed",
+      "evidence": "<scratch>/review.txt"
+    },
+    {
+      "attack": "3",
+      "stage": "S1",
+      "result": "PASS",
+      "depth": "mutated",
+      "evidence": "<scratch>/review.txt"
+    }
+  ],
+  "findings": [],
+  "measurements": [],
+  "mutations": [],
+  "builder_mutants": [
+    {
+      "file": "<mailbox>/S1/mutants-demo-S1-B-BUILD-r2.json",
+      "rows": 1,
+      "killed": 1,
+      "survived": [],
+      "invalid": 0
+    }
+  ],
+  "corpora": [],
+  "commands": [
+    {
+      "command": "python3 -B -m unittest discover -s tests",
+      "exit_code": 0
+    },
+    {
+      "command": "python3 -B <scratch>/probe.py --tree <tip-copy>",
+      "exit_code": 0
+    },
+    {
+      "command": "python3 -B <scratch>/probe.py --tree <base-copy>",
+      "exit_code": 1
+    },
+    {
+      "command": "<mutation-command> --input <builder-mutants> --tree <tip-copy>",
+      "exit_code": 0
+    }
+  ],
+  "scripts": [
+    {
+      "path": "<scratch>/probe.py",
+      "output": "<scratch>/review.txt"
+    }
+  ],
+  "versions": {
+    "language": "Python 3.12.0 (fictional example environment)",
+    "tests_run": 3
+  },
+  "evidence_minimums": {
+    "E1": "not_required",
+    "E2": "met",
+    "E3": "met",
+    "E4": "met",
+    "E5": "met",
+    "E6": "not_required"
+  },
+  "validator": {
+    "status": "not_available",
+    "command": null,
+    "exit_code": null,
+    "output": null
+  },
+  "isolation_note": "Illustrative: restricted mounts, scratch-only writes, no network or credentials.",
+  "riskiest_points": [],
+  "not_checked": [],
+  "verification_tooling": "unchanged",
+  "report_path": "<mailbox>/S1/report-demo-S1-R-CODE-r3-w1.md",
+  "repository_unchanged": true,
+  "status": "complete"
+}

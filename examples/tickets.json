@@ -1,0 +1,34 @@
+{
+  "tickets": [
+    {
+      "tag": "demo-S1-B-PREPARE-r1",
+      "role": "BUILDER",
+      "ticket": "<mailbox>/S1/ticket-demo-S1-B-PREPARE-r1.md",
+      "state": "completed",
+      "revision": 0,
+      "report": "<mailbox>/S1/report-demo-S1-B-PREPARE-r1.json",
+      "superseded_by": null,
+      "reason": "synthetic plan accepted by owner"
+    },
+    {
+      "tag": "demo-S1-B-BUILD-r2",
+      "role": "BUILDER",
+      "ticket": "<mailbox>/S1/ticket-demo-S1-B-BUILD-r2.md",
+      "state": "completed",
+      "revision": 0,
+      "report": "<mailbox>/S1/report-demo-S1-B-BUILD-r2.json",
+      "superseded_by": null,
+      "reason": "illustrative accepted delivery"
+    },
+    {
+      "tag": "demo-S1-R-CODE-r3",
+      "role": "REVIEWER",
+      "ticket": "<mailbox>/S1/ticket-demo-S1-R-CODE-r3.md",
+      "state": "completed",
+      "revision": 1,
+      "report": "<mailbox>/S1/report-demo-S1-R-CODE-r3-w1.json",
+      "superseded_by": null,
+      "reason": "illustrative accepted delivery"
+    }
+  ]
+}

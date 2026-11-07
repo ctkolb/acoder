@@ -1,0 +1,28 @@
+{
+  "session": "demo-S1-B-PREPARE-r1",
+  "stage": "S1",
+  "mode": "PREPARE",
+  "base_commit": "1111111111111111111111111111111111111111",
+  "head_commit": "1111111111111111111111111111111111111111",
+  "status": "ready",
+  "plan_first": false,
+  "sheet_path": null,
+  "calls_used": 4,
+  "calls_limit": 15,
+  "remaining_work": [],
+  "files_changed": [],
+  "contracts_addressed": [
+    "LIMIT-1"
+  ],
+  "checks": [],
+  "red_kind": "n/a",
+  "red_evidence": [],
+  "mutants": [],
+  "findings_addressed": [],
+  "candidates": [],
+  "coverage": [],
+  "measurements": [],
+  "adjacent_findings": [],
+  "report_path": "<mailbox>/S1/report-demo-S1-B-PREPARE-r1.md",
+  "blockers": []
+}

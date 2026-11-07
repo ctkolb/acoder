@@ -1,0 +1,10 @@
+# Local configuration and generated workflow artifacts
+.DS_Store
+.env
+.env.*
+!.env.example
+*.local.*
+mailbox/
+scratch/
+checkouts/
+__pycache__/

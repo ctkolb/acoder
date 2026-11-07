@@ -1,0 +1,48 @@
+{
+  "session": "demo-S1-B-BUILD-r2",
+  "stage": "S1",
+  "mode": "BUILD",
+  "base_commit": "1111111111111111111111111111111111111111",
+  "head_commit": "3333333333333333333333333333333333333333",
+  "status": "ready",
+  "plan_first": true,
+  "sheet_path": "<mailbox>/S1/sheet-demo-S1-B-BUILD-r2.md",
+  "calls_used": 12,
+  "calls_limit": 30,
+  "remaining_work": [],
+  "files_changed": [
+    "src/limit.py",
+    "tests/test_limit.py"
+  ],
+  "contracts_addressed": [
+    "LIMIT-1"
+  ],
+  "checks": [
+    {
+      "command": "<verify-command> --base <base-sha> --head <tip-sha> --red <red-sha>",
+      "exit_code": 0,
+      "log": "<scratch>/verification.txt"
+    }
+  ],
+  "red_kind": "FAILING",
+  "red_evidence": [
+    {
+      "commit": "2222222222222222222222222222222222222222",
+      "assertion_failures": 1,
+      "setup_errors": 0
+    }
+  ],
+  "mutants": [
+    {
+      "name": "remove_negative_guard",
+      "result": "KILLED"
+    }
+  ],
+  "findings_addressed": [],
+  "candidates": [],
+  "coverage": [],
+  "measurements": [],
+  "adjacent_findings": [],
+  "report_path": "<mailbox>/S1/report-demo-S1-B-BUILD-r2.md",
+  "blockers": []
+}

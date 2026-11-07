@@ -1,0 +1,14 @@
+{"tag": "demo-S1-B-PREPARE-r1", "state": "pending", "revision": 0, "reason": "synthetic preparation"}
+{"tag": "demo-S1-B-PREPARE-r1", "state": "active", "revision": 0, "reason": "synthetic preparation"}
+{"tag": "demo-S1-B-PREPARE-r1", "state": "awaiting_validation", "revision": 0, "reason": "synthetic preparation"}
+{"tag": "demo-S1-B-PREPARE-r1", "state": "completed", "revision": 0, "reason": "synthetic preparation"}
+{"tag": "demo-S1-B-BUILD-r2", "state": "pending", "revision": 0, "reason": "synthetic lifecycle illustration"}
+{"tag": "demo-S1-B-BUILD-r2", "state": "active", "revision": 0, "reason": "synthetic lifecycle illustration"}
+{"tag": "demo-S1-B-BUILD-r2", "state": "awaiting_validation", "revision": 0, "reason": "synthetic lifecycle illustration"}
+{"tag": "demo-S1-B-BUILD-r2", "state": "completed", "revision": 0, "reason": "synthetic lifecycle illustration"}
+{"tag": "demo-S1-R-CODE-r3", "state": "pending", "revision": 0, "reason": "synthetic lifecycle illustration"}
+{"tag": "demo-S1-R-CODE-r3", "state": "active", "revision": 0, "reason": "synthetic lifecycle illustration"}
+{"tag": "demo-S1-R-CODE-r3", "state": "awaiting_validation", "revision": 0, "reason": "synthetic lifecycle illustration"}
+{"tag": "demo-S1-R-CODE-r3", "state": "rework", "revision": 1, "reason": "synthetic lifecycle illustration"}
+{"tag": "demo-S1-R-CODE-r3", "state": "awaiting_validation", "revision": 1, "reason": "synthetic lifecycle illustration"}
+{"tag": "demo-S1-R-CODE-r3", "state": "completed", "revision": 1, "reason": "synthetic lifecycle illustration"}
