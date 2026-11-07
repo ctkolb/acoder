@@ -131,7 +131,8 @@ changed-file lists alone are insufficient. The orchestrator records the full sou
 commit and a content manifest (paths, types, modes, file hashes and symlink targets),
 checks extraction against that manifest, and gives it to the reviewer for verification.
 Read-only modes prevent accidental edits; they do not confine a process running as
-the file owner. See docs/environment.md for execution defaults and optional isolation.
+the file owner. These execution defaults are self-contained; repository documentation
+may provide additional context but is not an installed-skill prerequisite.
 
 PROJECT RECORDS
 REPORT-ONLY OVERRIDE: when Deliverable is "report only", make no repository
@@ -358,6 +359,25 @@ independent review of the riskiest boundary before closing it; at most three
 fix rounds, after which the owner decides.
 The owner approves the tier (a DIRECTED brief proposes it).
 
+EXECUTION READINESS (before the first BUILD/FIX in an environment)
+Record one consolidated inventory in the mailbox before issuing an executable
+BUILD/FIX ticket. Reuse it until the environment or required checks change.
+Check the actual command paths, runnable versions/architecture, optional dependency
+environments, pinned lint/scanner tools, relevant hook command resolution, and
+host controls required by PROJECT. A path existing is not proof it can run.
+Use harmless version/import probes, not project execution without authorization.
+Aggregate missing prerequisites rather than dispatching a build to discover them
+one at a time. Do not install or download anything without existing authorization.
+
+Classify each required item as an implementation prerequisite or a final closure
+gate, with its availability, evidence and applicable stop condition. Preserve all
+owner-approved requirements. Missing closure-only tools need not stop unrelated
+implementation if the ticket explicitly permits it and PROJECT has no conflicting
+stop rule; the affected checks remain NOT_CHECKED and closure stays blocked.
+Missing implementation prerequisites stop the affected work. If an explicit rule
+requires a broader stop, honor it; propose the smallest decision needed to change
+it. Resolve the whole inventory before redispatch, not just the first missing tool.
+
 STAGE TICKET
 Generate tickets from approved artifacts (plan sections, contract IDs, brief
 statements, triage IDs) rather than rewriting their contents. Stable rules
@@ -377,6 +397,8 @@ ticket file begins with a header block:
     ticket is a tooling ticket that lists it as allowed)
   Verification (the exact entry-point command):
   Red evidence kind (BUILD and FIX): FAILING | CHARACTERIZATION | NONE (reason)
+  Mutation requirement (BUILD and FIX): required (path and targets) | NONE (reason)
+  Readiness evidence / implementation prerequisites / closure-only missing gates:
   Measurement (quantitative goals): metric, method, baseline commit, number of
     runs, noise, threshold
   Report path (md and json) / scratch path / mutants path:
@@ -399,8 +421,16 @@ ticket file begins with a header block:
   Evidence sizes (reviews): corpus cases and own mutants required (0 = not
     required), and the report validator command
   Replacing an earlier session: yes|no
-Line 2 of every ticket must start with "To: BUILDER" or "To: REVIEWER" so the
-receiving session can find it. A review export has no git metadata: a review
+Use the same two-line header in all roles: line 1 is exactly TICKET <tag>;
+line 2 starts with To: BUILDER or To: REVIEWER (then Mode if desired).
+Before dispatch, compare the actual file's first two lines with its filename,
+ledger tag/role, expected identity, limits and report/scratch paths. Check that
+readiness and evidence applicability are explicit. A ticket is a proposal until
+owner dispatch; do not treat its creation as budget or execution authorization.
+Select red evidence and mutations for the changed contracts: mechanical docs or
+support metadata may use NONE with a reason and meaningful alternative evidence.
+Do not create ceremonial tests/mutations or override an existing required gate;
+changes to owner-approved evidence requirements still require owner approval. A review export has no git metadata: a review
 ticket names the export paths and the full SHAs as the identity, not a branch.
 Query HEAD immediately before writing a ticket. Never change the expected commit
 silently afterward; issue a new ticket instead.
@@ -411,9 +441,9 @@ BUILD LOOP
 2. When the report is ready, run the verification entry point once. It saves
    full logs and returns a compact, commit-bound summary: identity, changed
    files, scope against the allowed/forbidden lists, approved checks, a
-   red-first check against the tests-only commit, and a minimum check inventory.
+   red-first check when required by the ticket, and a minimum check inventory.
    Inspect logs only for failures, inconsistencies, or missing evidence.
-   Run the builder's mutants file with the project's mutant runner (scratch
+   When mutations are required, run the builder's mutants file with the project's mutant runner (scratch
    copies live outside the repository) at the commit you propose to close on, and
    again after any fix that changed code a mutant anchors to. The reviewer reruns
    that file and its own mutants in CODE and reports the rows, so rerun the
