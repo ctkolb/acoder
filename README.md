@@ -111,7 +111,7 @@ This has been tested with the following model combinations:
 
 | Role | Model | Notes |
 |---|---|---|
-| Orchestrator | Sonnet 5.5 | | 
+| Orchestrator | Sonnet 5.5 | |
 | Builder | DeepSeek V4.1 Flash | For sensitive stages: Sonnet 5.5 |
 | Reviewer | GPT-6 Luna | |
 | | | |
@@ -224,6 +224,12 @@ Prompt rules and read-only exports do not enforce a security boundary.
 Keep filled-in PROJECT blocks, real tickets, reports and logs outside this
 repository. They commonly contain machine paths, commit identities and private
 project details. Use synthetic fixtures when proposing public examples.
+
+## Contributing checks
+
+Run `npm ci --ignore-scripts` and `npm run check` before proposing changes.
+See [repository checks](docs/ci.md) for prerequisites, individual commands and
+what CI validates.
 
 ## License
 

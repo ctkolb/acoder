@@ -8,3 +8,4 @@ mailbox/
 scratch/
 checkouts/
 __pycache__/
+node_modules/

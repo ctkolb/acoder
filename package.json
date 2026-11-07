@@ -1,0 +1,26 @@
+{
+  "name": "acoding-checks",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "npm run lint:markdown && npm run validate && npm test && npm run lint:workflows",
+    "lint:markdown": "markdownlint-cli2",
+    "validate": "node scripts/validate.mjs",
+    "test": "node --test scripts/*.test.mjs",
+    "hooks:install": "node scripts/install-hooks.mjs",
+    "lint:workflows": "go -C tools run github.com/rhysd/actionlint/cmd/actionlint"
+  },
+  "overrides": {
+    "katex": "0.18.2",
+    "re2js": "2.8.7"
+  },
+  "devDependencies": {
+    "github-slugger": "2.0.0",
+    "markdown-it": "14.3.3",
+    "markdownlint-cli2": "0.24.0",
+    "yaml": "2.9.1"
+  }
+}
