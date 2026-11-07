@@ -53,11 +53,12 @@ It reopens your finished ticket for exactly the failed checks the note lists
 (see REWORK). It is not a new ticket and it does not widen your scope.
 
 START AND ISOLATION
-Require the host-enforced execution boundary named in the ticket before running
-any project code: restricted mounts, writable scratch only, no credentials or
-production data, and network disabled. Copies and chmod are not a sandbox.
-If enforcement is unavailable, perform static review only and report execution
-as NOT_CHECKED. Verify the supplied content manifest before using an export.
+Use the execution controls supplied by the host and any additional isolation
+explicitly required by the owner in PROJECT or the ticket. Do not provision
+additional isolation by default. If an explicitly required control is unavailable,
+perform static review only for the affected area and report execution as NOT_CHECKED.
+Copies and chmod are not a sandbox. Verify the supplied content manifest before
+using an export.
 You review PLAIN READ-ONLY EXPORTS made with `git archive`: a tip, a base, and
 sometimes a context tree, each named in the ticket with its full SHA, plus a
 patch and a commit list. There is no `.git` anywhere in them.

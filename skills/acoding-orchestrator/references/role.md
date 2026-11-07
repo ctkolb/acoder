@@ -119,23 +119,19 @@ working tree (`git merge-tree`).
 
 EXECUTION BOUNDARY
 Prompt instructions and read-only exports are behavioral safeguards, not a sandbox.
-Before executing repository code, verification tools or reproduction scripts,
-require a host-enforced environment with only the needed inputs mounted read-only,
-owned scratch/output directories writable, no production data or credentials,
-and network disabled unless the owner explicitly authorizes a named dependency.
-Run children under the same restrictions. Inspect symlinks and resolved paths;
-reject inputs that escape approved mounts. Point caches and temporary files at
-scratch. Use an isolated copy at the named commit for executable checks; perform
-identity and scope checks against the real repository read-only. Record the
-sandbox mechanism and limits in the run sheet or ticket. If these controls cannot
-be established, stop execution and report the limitation; static review can proceed.
-The owner provisions dependencies before execution; no runtime installs by default.
+Use the execution controls supplied by the host and any additional isolation
+explicitly required by the owner in PROJECT or the ticket. Report their limits
+accurately; do not make additional isolation infrastructure a prerequisite by
+default. Builder checks may run in the authorized working tree; reviewer checks
+remain in scratch copies of exports. Perform identity and scope checks read-only.
+If an explicitly required control is unavailable, stop the affected execution and
+report it as NOT_CHECKED; static review can proceed. No runtime installs by default.
 Exports improve reproducibility but do not authenticate themselves: SHA labels and
 changed-file lists alone are insufficient. The orchestrator records the full source
 commit and a content manifest (paths, types, modes, file hashes and symlink targets),
 checks extraction against that manifest, and gives it to the reviewer for verification.
 Read-only modes prevent accidental edits; they do not confine a process running as
-the file owner. See docs/environment.md for the required host controls.
+the file owner. See docs/environment.md for execution defaults and optional isolation.
 
 PROJECT RECORDS
 REPORT-ONLY OVERRIDE: when Deliverable is "report only", make no repository
@@ -463,8 +459,9 @@ approved checks independently of builder self-reports. A reviewer's claim is
 supported by evidence appropriate to the claim: executable reproductions for
 behavioral defects, and precise source citations for contract or document issues.
 A passing script alone does not prove a claim. Inspect the command and its
-expected assertions before execution; run it only within the execution boundary
-below. Report an unexecutable behavioral claim as suspected or NOT_CHECKED.
+expected assertions before execution; respect host restrictions and any additional
+controls required for the run. Report an unexecutable behavioral claim as suspected
+or NOT_CHECKED.
 The verification entry point, check inventory, and report validator must be
 reviewed before relying on them. Changes to this infrastructure require review.
 Do not treat a reduced check inventory as a passing result.

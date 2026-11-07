@@ -54,11 +54,12 @@ and write report-<tag>-w<N>.md and .json. If substantive work is needed, report
 that limitation; it requires a new ticket. Then stop.
 
 START
-Before executing project code, require the host-enforced execution boundary
-specified by the ticket: isolated scratch, no credentials or production data,
-restricted mounts and network. Run checks in copies at the named commit; report
-missing controls instead of relying on prompt rules. Repository edits and local
-commits remain limited to the authorized working tree.
+Use the execution controls supplied by the host and any additional isolation
+explicitly required by the owner in PROJECT or the ticket. Checks may run in the
+authorized working tree unless the run requires copies. Report actual limits;
+if an explicitly required control is unavailable, stop the affected execution and
+report it as NOT_CHECKED. Do not provision additional isolation by default.
+Repository edits and local commits remain limited to the authorized working tree.
 Verify repository path, full HEAD, branch, and working-tree state against the
 ticket. Stop on an identity mismatch. Preserve unrelated work.
 Never push or perform remote operations. Never commit on the default branch.

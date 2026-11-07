@@ -1,4 +1,4 @@
-# Environment and execution requirements
+# Environment and execution guidance
 
 This project supplies skills, Markdown entry points and documentation. It does not supply a sandbox,
 agent launcher, verification runner or report validator. The workflow assumes
@@ -7,11 +7,23 @@ Git available to the builder and orchestrator. Examples use POSIX command syntax
 Windows users must adapt paths and commands. No host/model compatibility matrix
 or comparative effectiveness benchmark has been established for this release.
 
-## Provisioning
+## Execution defaults
 
-Before a run, identify the host mechanism that enforces the ticket's boundaries:
-a configured container, VM, or agent execution sandbox. A container with broad
-host mounts or credentials is insufficient. Record these settings in the run sheet:
+Use the execution controls supplied by the host. Builders may run checks in their
+authorized working tree; orchestrators run the approved verification commands.
+Reviewers still use scratch copies of read-only exports, with no Git metadata,
+real-repository or credential access, or network use. These role restrictions
+apply whether or not the run requires additional isolation.
+
+Report actual controls and limitations accurately. Additional isolation
+infrastructure is not a prerequisite unless the owner explicitly requires it in
+PROJECT or the ticket. Prompt rules, copies and read-only modes are not a sandbox.
+
+## Additional isolation (when explicitly required)
+
+Use the host mechanism and restrictions specified for the run, such as a configured
+container, VM or agent execution sandbox. Record the actual settings in the run
+sheet, including the following where required:
 
 - Read-only inputs: the exact source export and approved tooling/dependencies.
 - Writable outputs: owned scratch, cache, temporary and report directories.
@@ -27,12 +39,11 @@ versions and runtime in evidence. If a project requires Git metadata to build,
 stop and propose a compatible exported version fixture or build input; do not
 silently give the reviewer a live repository.
 
-Verify denied writes and network access using harmless probes before executing
-project code. Store the observed controls and any limitations. If enforcement
-cannot be established, proceed with static review only and mark execution
-NOT_CHECKED. Read-only file modes and instructions alone do not enforce isolation.
-The agent provider's handling of prompts and files is separate from network
-restrictions on subprocesses; choose permitted data accordingly.
+Verify the explicitly required controls with harmless probes before the affected
+execution. Store observations and limitations. If a required control cannot be
+established, proceed with static review only for the affected area and mark
+execution NOT_CHECKED. The agent provider's handling of prompts and files is
+separate from network restrictions on subprocesses; choose permitted data accordingly.
 
 ## Exports
 
@@ -48,8 +59,8 @@ commit and a list of changed filenames do not establish content identity.
 Running a script successfully establishes only the assertions it checks. Review
 those assertions, their inputs and expected failure behavior. Setup errors,
 missing dependencies and zero-test runs are not successful defect reproductions
-or mutation kills. Code from a reviewed project and reviewer-authored scripts
-receive the same execution restrictions.
+or mutation kills. Apply the run's execution restrictions to both project code
+and reviewer-authored scripts.
 
 The workflow seeks diverse review perspectives. Different model families do not
 guarantee independent errors. No measured claim about defect detection, cost or
