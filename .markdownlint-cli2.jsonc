@@ -1,0 +1,28 @@
+{
+  "globs": ["**/*.md"],
+  "ignores": ["node_modules/**"],
+  "config": {
+    "MD013": false,
+    "MD024": { "siblings_only": true },
+    "MD060": false
+  },
+  "overrides": [
+    {
+      // Protocols use plain-text headers, compact lists, and angle-bracket placeholders.
+      "filter": ["examples/*.md"],
+      "combine": "merge",
+      "config": { "MD033": false, "MD041": false }
+    },
+    {
+      "filter": ["skills/*/references/*.md"],
+      "combine": "merge",
+      "config": { "MD031": false, "MD032": false, "MD033": false, "MD041": false }
+    },
+    {
+      // The template separators are parsed as Setext headings.
+      "filter": ["project-block.md"],
+      "combine": "merge",
+      "config": { "MD022": false, "MD033": false, "MD041": false }
+    }
+  ]
+}
