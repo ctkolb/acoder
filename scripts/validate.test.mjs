@@ -61,7 +61,13 @@ test('ledger drift and selecting an obsolete report fail', async t => {
     value.tickets[2].revision = 1;
     value.tickets[2].report = '<mailbox>/S1/report-demo-S1-R-CODE-r3.json';
   });
-  await assert.rejects(checkExamples(directory), /report-demo-S1-R-CODE-r3/);
+  // Node may insert ANSI escapes between individual characters in its diff.
+  // Check the error's values rather than its terminal-formatted message.
+  await assert.rejects(checkExamples(directory), {
+    code: 'ERR_ASSERTION',
+    actual: '<mailbox>/S1/report-demo-S1-R-CODE-r3.json',
+    expected: '<mailbox>/S1/report-demo-S1-R-CODE-r3-w1.json',
+  });
 });
 
 test('invalid event transitions fail even when final ledger state is unchanged', async t => {
