@@ -201,7 +201,7 @@ or your pasted pointer line.
 
 This is a skill collection with manual session handoffs. Supply a project with Git history, usable
 checks, provisioned dependencies and sessions with local file/tool access. Read
-[environment requirements](docs/environment.md) and [tooling contracts](docs/tooling.md)
+[environment guidance](docs/environment.md) and [tooling contracts](docs/tooling.md)
 first. There is no bundled execution sandbox, mutation runner or report validator.
 The commands and evidence below are project-specific inputs, not tools shipped here.
 
@@ -215,10 +215,11 @@ tickets, reports, a rework revision and closure. All outcomes in that example ar
 illustrative. This release has not been validated by an end-to-end agent run or
 benchmarked against a single-agent workflow.
 
-Prompt rules and read-only exports do not enforce a security boundary. The host
-must restrict executable checks and reproductions as described in the environment
-requirements. If that cannot be established, use static review and report the
-execution coverage gap.
+Use the host's execution controls and report their limits accurately. Additional
+isolation infrastructure is required only when the owner explicitly selects it
+for the run; missing explicitly required controls block the affected execution.
+Reviewer export, scratch, credential and network restrictions still apply.
+Prompt rules and read-only exports do not enforce a security boundary.
 
 Keep filled-in PROJECT blocks, real tickets, reports and logs outside this
 repository. They commonly contain machine paths, commit identities and private

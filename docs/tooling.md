@@ -13,7 +13,9 @@ paths, named checks and minimum check inventory, plus the tests-only commit when
 red evidence is required. The command records what it actually ran, saves logs,
 and returns nonzero on failed checks, identity/scope mismatches, incomplete
 execution or inadequate inventory. Identity/scope inspection is read-only;
-executable checks run in isolated copies. Never use a blanket exit-zero wrapper.
+executable checks use the authorized working tree or copies as required by the
+role and run. Respect host restrictions and any explicitly required additional
+isolation. Never use a blanket exit-zero wrapper.
 
 Illustrative input (this command is not shipped):
 
