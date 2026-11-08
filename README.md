@@ -74,7 +74,7 @@ This has been tested with the following model combinations:
 
 | Circumstance | Orchestrator | Builder | Reviewer |
 |---|---|---|---|
-| Low stakes / Low-budget | Sonnet 5.5 | DeepSeek V4.1 Flash | GLM-5.3 or DeepSeek V4.1 Flash |
+| Low stakes / Low-budget | Sonnet 5.5 | DeepSeek V4.1 Flash | GLM-5.3 |
 | Sensitive | Sonnet 5.5 | Sonnet 5.5 | GPT-6 Luna |
 | Sensitive alt | GPT-6 Terra | GPT-6.1 Sol | Sonnet 5.5 |
 
