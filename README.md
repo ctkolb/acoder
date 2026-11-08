@@ -107,17 +107,24 @@ same builder session; a closed stage ends the sessions (below).
 
 ## Model Recommendations
 
-This has been tested with the following model combinations:
+The most important part of this system is that the vendor for the Builder model needs to be different from the vendor of the Reviewer model. Choosing which model to use should be considered based on the complexity of the code, sensitivity of the project, and your budget. Just keep in mind that more expensive does not necessarily mean stronger for all roles. Especially for Orchestrator and Reviewer, some of the cheaper models from the popular vendors get better benchmarks.
+
+These skills have been tested with the following model combinations:
 
 | Role | Model | Notes |
 |---|---|---|
-| Orchestrator | Sonnet 5.5 | |
-| Builder | DeepSeek V4.1 Flash | For sensitive stages: Sonnet 5.5 |
+| Orchestrator | Sonnet 5.5 or GPT-6 Luna | |
+| Builder | Sonnet 5.5 | |
 | Reviewer | GPT-6 Luna | |
 | | | |
-| Orchestrator | GPT-6 Terra | |
+| Orchestrator | Sonnet 5.5 or GPT-6 Luna | |
 | Builder | GPT-6.1 Sol | |
-| Reviewer | DeepSeek V4.1 Flash | For senstive stages: GLM-5.3 |
+| Reviewer | DeepSeek V4.1 Flash | For senstive stages: GLM-5.3 or Sonnet 5.5 |
+| | | |
+| Orchestrator | Sonnet 5.5 or GPT-6.1 Luna | |
+| Builder | DeepSeek V4.1 Flash | For sensitive stages: Sonnet 5.5 |
+| Reviewer | GPT-6.1 Luna | |
+
 
 ## DIRECTED run options (Template B)
 
