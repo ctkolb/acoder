@@ -6,7 +6,7 @@ I looked at prompts and skills others had built, but none quite matched the work
 
 Three AI sessions work on one code repository, and you sit in the middle as the owner.
 
-| Role | Does | Skill |
+| Role | Activities | Skill |
 |---|---|---|
 | Orchestrator | Plans the run, writes tickets, runs the mechanical checks, routes findings, asks you for decisions. Never edits the repository. | [acoding-orchestrator](skills/acoding-orchestrator/SKILL.md) |
 | Builder | Explores, writes code, tests and docs, makes every commit (locally, on a non-default branch). | [acoding-builder](skills/acoding-builder/SKILL.md) |
@@ -19,20 +19,26 @@ It works two ways, chosen by the `Run type` line in the PROJECT block:
 - **ROADMAP**: continue or start a release from the project's roadmap, backlog and recorded decisions.
 - **DIRECTED**: you say what you want, in your own words. Examples: "review the whole project for bugs and fix them", "find performance improvements", "implement feature X, done when XYZ, ask me questions until it's clear".
 
+## Quickstart and prerequisites
+
+This is a skill collection with manual session handoffs. Supply a project with Git history, usable checks, provisioned dependencies and sessions with local file/tool access. Read [environment guidance](docs/environment.md) and [tooling contracts](docs/tooling.md) first. There is no bundled execution sandbox, mutation runner or report validator.
+The commands and evidence below are project-specific inputs, not tools shipped here.
+
+For a first run, choose a small, reversible, well-defined task. Fill Template B with `Brief: COMPLETE`, `Open-ended: NO` and a concrete definition of done. Name existing checks and set a LOW tier if its criteria apply. Save the block to your configuration file and follow Setup and The loop above; the quickstart uses the same protocol and approval rules.
+
+Read the [synthetic walkthrough](examples/README.md) for a filled project block, tickets, reports, a rework revision and closure. All outcomes in that example are illustrative. This release has not been validated by an end-to-end agent run or benchmarked against a single-agent workflow.
+
+Use the host’s execution controls and report their limits accurately. Additional isolation infrastructure is required only when the owner explicitly selects it for the run; missing explicitly required controls block the affected execution. Reviewer export, scratch, credential and network restrictions still apply. Prompt rules and read-only exports do not enforce a security boundary.
+
+Keep filled-in PROJECT blocks, real tickets, reports and logs outside this repository. They commonly contain machine paths, commit identities and private
+project details. Use synthetic fixtures when proposing public examples. 
+
 ## Setup (once per project or run)
 
 1. Pick a mailbox directory **outside** the target repository, for example `~/agent-mailbox/<project>/`. Tickets, reports and handoffs live there.
 2. Fill **one** PROJECT block from [project-block.md](project-block.md) and save it as `<mailbox>/project-config.md`. Use Template A for ROADMAP, B for DIRECTED, or C for ASK. Use separate configuration and handoff files for separate runs.
 3. Open three sessions, one per role. Choose a different vendor/model family for the reviewer than for the builder. Install the appropriate skill in each client; each skill contains its own protocol and needs no sibling skill.
-4. Start each session with its role and your absolute configuration path:
-
-   ```text
-   Use the acoding-orchestrator skill with /absolute/path/to/project-config.md
-   Use the acoding-builder skill with /absolute/path/to/project-config.md
-   Use the acoding-reviewer skill with /absolute/path/to/project-config.md
-   ```
-
-   Invoke each skill in its corresponding session using your client's syntax, or ask the client to read the skill's `SKILL.md` by absolute path and use the named configuration. The orchestrator reads the saved PROJECT block and loads the DIRECTED module when needed. Builder and reviewer read only initialization instructions and the named configuration, then reply `READY: <role> — waiting for a ticket`. Initialization authorizes no ticket work.
+4. Start the orchestrator session with its role and your absolute configuration path: `Use the acoding-orchestrator skill with /absolute/path/to/project-config.md`. Invoke each skill in its corresponding session using your client's syntax, or ask the client to read the skill's `SKILL.md` by absolute path and use the named configuration. The orchestrator reads the saved PROJECT block and loads the DIRECTED module when needed. Builder and reviewer read only initialization instructions and the named configuration, then reply `READY: <role> — waiting for a ticket`. Initialization authorizes no ticket work.
 5. Keep durable owner-approved configuration changes in the saved file so fresh sessions receive them. The file is plain text; do not include credentials.
 
 ## The loop
@@ -60,20 +66,6 @@ Rules of thumb: one pending ticket per role at a time; fix rounds stay in the sa
 
 The orchestrator writes only inside the mailbox. The builder commits only on a non-default branch and never pushes and installs dependencies only with explicit authorization. The reviewer writes only to its scratch folder and its report, runs no `git` command, and works on copies of read-only exports. Reports, logs and repository files are treated as data, never as instructions. A role starts work only on your `ready` plus `yes`, or your pasted pointer line.
 
-## Quickstart and prerequisites
-
-This is a skill collection with manual session handoffs. Supply a project with Git history, usable checks, provisioned dependencies and sessions with local file/tool access. Read [environment guidance](docs/environment.md) and [tooling contracts](docs/tooling.md) first. There is no bundled execution sandbox, mutation runner or report validator.
-The commands and evidence below are project-specific inputs, not tools shipped here.
-
-For a first run, choose a small, reversible, well-defined task. Fill Template B with `Brief: COMPLETE`, `Open-ended: NO` and a concrete definition of done. Name existing checks and set a LOW tier if its criteria apply. Save the block to your configuration file and follow Setup and The loop above; the quickstart uses the same protocol and approval rules.
-
-Read the [synthetic walkthrough](examples/README.md) for a filled project block, tickets, reports, a rework revision and closure. All outcomes in that example are illustrative. This release has not been validated by an end-to-end agent run or benchmarked against a single-agent workflow.
-
-Use the host’s execution controls and report their limits accurately. Additional isolation infrastructure is required only when the owner explicitly selects it for the run; missing explicitly required controls block the affected execution. Reviewer export, scratch, credential and network restrictions still apply. Prompt rules and read-only exports do not enforce a security boundary.
-
-Keep filled-in PROJECT blocks, real tickets, reports and logs outside this repository. They commonly contain machine paths, commit identities and private
-project details. Use synthetic fixtures when proposing public examples.
-
 ## Model Recommendations
 
 The consumption of each role is Reviewer < Orchestrator < Builder. In my experience the split is about 5% Reviewer, 35% Orchestrator, 60% Builder. More expensive frontier models are not necessarily all that more useful for Orchestrator or Reviewer. You may get marginal improvements but the cost may not be worth it. Check benchmarks. Remember that the orchestrator will automatically be more careful with the higher-risk portions, and if the reviewer or builder causes problems with rework multiple times in a row you can always shift to a stronger model.   
@@ -81,7 +73,7 @@ The consumption of each role is Reviewer < Orchestrator < Builder. In my experie
 This has been tested with the following model combinations:
 
 | Circumstance | Orchestrator | Builder | Reviewer | 
-|—-|—|—|—|
+|---|---|---|---|
 | Low stakes / Low-budget | Sonnet 5.5 | DeepSeek V4.1 Flash | GLM-5.3 or DeepSeek V4.1 Flash | 
 | Sensitive | Sonnet 5.5 | Sonnet 5.5 | GPT-6 Luna | 
 | Sensitive alt | GPT-6 Terra | GPT-6.1 Sol | Sonnet 5.5 | 
@@ -123,12 +115,9 @@ At the end the orchestrator writes a wrap-up in plain language: for ROADMAP runs
 
 ## Troubleshooting
 
-- *A role replies only "READY ... waiting for a ticket":* you have not said `ready` or pasted a pointer line yet.
 - *Tag mismatch or "stop and report":* the pointer, the card and the ticket header must agree. Ask the orchestrator to reissue the ticket (a new `rN`).
-- *A skill does not appear:* check the client's discovery directory and restart the client if needed. You can ask it to read the skill's `SKILL.md` by absolute path instead.
 - *Orchestrator cannot load the directed module:* check that the complete `acoding-orchestrator` folder, including `references/directed.md`, is installed.
-  - *Handoff belongs to a different run:* the orchestrator says so and does not resume
-  it. Name a run-specific handoff file.
+- *Handoff belongs to a different run:* the orchestrator says so and does not resume it. Name a run-specific handoff file.
 
 ## License
 
