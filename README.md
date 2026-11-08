@@ -31,7 +31,7 @@ Read the [synthetic walkthrough](examples/README.md) for a filled project block,
 Use the host’s execution controls and report their limits accurately. Additional isolation infrastructure is required only when the owner explicitly selects it for the run; missing explicitly required controls block the affected execution. Reviewer export, scratch, credential and network restrictions still apply. Prompt rules and read-only exports do not enforce a security boundary.
 
 Keep filled-in PROJECT blocks, real tickets, reports and logs outside this repository. They commonly contain machine paths, commit identities and private
-project details. Use synthetic fixtures when proposing public examples. 
+project details. Use synthetic fixtures when proposing public examples.
 
 ## Setup (once per project or run)
 
@@ -68,21 +68,21 @@ The orchestrator writes only inside the mailbox. The builder commits only on a n
 
 ## Model Recommendations
 
-The consumption of each role is Reviewer < Orchestrator < Builder. In my experience the split is about 5% Reviewer, 35% Orchestrator, 60% Builder. More expensive frontier models are not necessarily all that more useful for Orchestrator or Reviewer. You may get marginal improvements but the cost may not be worth it. Check benchmarks. Remember that the orchestrator will automatically be more careful with the higher-risk portions, and if the reviewer or builder causes problems with rework multiple times in a row you can always shift to a stronger model.   
+The consumption of each role is Reviewer < Orchestrator < Builder. In my experience the split is about 5% Reviewer, 35% Orchestrator, 60% Builder. More expensive frontier models are not necessarily all that more useful for Orchestrator or Reviewer. You may get marginal improvements but the cost may not be worth it. Check benchmarks. Remember that the orchestrator will automatically be more careful with the higher-risk portions, and if the reviewer or builder causes problems with rework multiple times in a row you can always shift to a stronger model.
 
 This has been tested with the following model combinations:
 
-| Circumstance | Orchestrator | Builder | Reviewer | 
+| Circumstance | Orchestrator | Builder | Reviewer |
 |---|---|---|---|
-| Low stakes / Low-budget | Sonnet 5.5 | DeepSeek V4.1 Flash | GLM-5.3 or DeepSeek V4.1 Flash | 
-| Sensitive | Sonnet 5.5 | Sonnet 5.5 | GPT-6 Luna | 
-| Sensitive alt | GPT-6 Terra | GPT-6.1 Sol | Sonnet 5.5 | 
+| Low stakes / Low-budget | Sonnet 5.5 | DeepSeek V4.1 Flash | GLM-5.3 or DeepSeek V4.1 Flash |
+| Sensitive | Sonnet 5.5 | Sonnet 5.5 | GPT-6 Luna |
+| Sensitive alt | GPT-6 Terra | GPT-6.1 Sol | Sonnet 5.5 |
 
 I do plan to test using Opus, Astra, etc. but I haven’t had the need yet. It likely is fine.
 
 ## DIRECTED run options (Template B)
 
-Used when you prefer to give the Orchestrator a specific objective rather than giving it more general statements in a project block and having it do discovery in the repo and making recommendations on its own. 
+Used when you prefer to give the Orchestrator a specific objective rather than giving it more general statements in a project block and having it do discovery in the repo and making recommendations on its own.
 
 | Line | Values | Effect |
 |---|---|---|
