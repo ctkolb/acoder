@@ -68,7 +68,7 @@ The orchestrator writes only inside the mailbox. The builder commits only on a n
 
 ## Model Recommendations
 
-The consumption of each role is Reviewer < Orchestrator < Builder. In my experience the split is about 5% Reviewer, 35% Orchestrator, 60% Builder. More expensive frontier models are not necessarily all that more useful for Orchestrator or Reviewer. You may get marginal improvements but the cost may not be worth it. Check benchmarks. Remember that the orchestrator will automatically be more careful with the higher-risk portions, and if the reviewer or builder causes problems with rework multiple times in a row you can always shift to a stronger model.
+The consumption of each role is Orchestrator < Reviewer < Builder. In my experience the split is about 5% Orchestrator, 40% Reviewer, 55% Builder. More expensive frontier models are not necessarily all that more useful for Orchestrator or Reviewer. You may get marginal improvements but the cost may not be worth it. Check benchmarks. Remember that the orchestrator will automatically be more careful with the higher-risk portions, and if the reviewer or builder causes problems with rework multiple times in a row you can always shift to a stronger model.
 
 This has been tested with the following model combinations:
 
