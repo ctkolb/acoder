@@ -13,7 +13,7 @@ const git = (repo, ...args) => execFileSync('git', ['-C', repo, ...args], { enco
 const update = (tip, base = zero, ref = 'refs/heads/test') => `${ref} ${tip} ${ref} ${base}\n`;
 
 async function repository(t) {
-  const repo = await mkdtemp(path.join(os.tmpdir(), 'acoding-hook-test-'));
+  const repo = await mkdtemp(path.join(os.tmpdir(), 'acoder-hook-test-'));
   t.after(() => rm(repo, { recursive: true, force: true }));
   git(repo, 'init', '--quiet');
   git(repo, 'config', 'user.name', 'Synthetic Test');

@@ -13,7 +13,7 @@ is no new consequential contract requiring separate SPEC review. The LOW stage
 adds a missing negative-value guard. The builder and reviewer use different
 model families selected by the owner. This walkthrough explicitly opts into an
 owner-provisioned sandbox in its PROJECT rules; that is an optional run requirement,
-not a prerequisite for every acoding run.
+not a prerequisite for every acoder run.
 
 1. Save the filled PROJECT block below as a configuration file outside the
    target repository, then invoke each role skill as described in the main README.

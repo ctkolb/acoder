@@ -1,4 +1,4 @@
-# acoding: Adversarial coding loop
+# acoder: Adversarial Coding Loop
 
 This project is a collection of skills for coordinating AI coding and independent review across multiple model vendors. The motivation is to dodge tunnel vision: a single model or even different models from the same vendor can miss problems because of patterns in its training, and models from the same vendor may share some of those blind spots. Using different vendors is my preferred way to bring more varied perspectives to the work.
 
@@ -8,9 +8,9 @@ Three AI sessions work on one code repository, and you sit in the middle as the 
 
 | Role | Activities | Skill |
 |---|---|---|
-| Orchestrator | Plans the run, writes tickets, runs the mechanical checks, routes findings, asks you for decisions. Never edits the repository. | [acoding-orchestrator](skills/acoding-orchestrator/SKILL.md) |
-| Builder | Explores, writes code, tests and docs, makes every commit (locally, on a non-default branch). | [acoding-builder](skills/acoding-builder/SKILL.md) |
-| Reviewer | A different model family from the builder. Challenges the work, reproduces defects, tests the tests. Reviews exports; writes scratch evidence and reports. | [acoding-reviewer](skills/acoding-reviewer/SKILL.md) |
+| Orchestrator | Plans the run, writes tickets, runs the mechanical checks, routes findings, asks you for decisions. Never edits the repository. | [acoder-orchestrator](skills/acoder-orchestrator/SKILL.md) |
+| Builder | Explores, writes code, tests and docs, makes every commit (locally, on a non-default branch). | [acoder-builder](skills/acoder-builder/SKILL.md) |
+| Reviewer | A different model family from the builder. Challenges the work, reproduces defects, tests the tests. Reviews exports; writes scratch evidence and reports. | [acoder-reviewer](skills/acoder-reviewer/SKILL.md) |
 
 The point is independence: the reviewer does not take the builder's word for  anything, and the orchestrator does not take either one's word for anything it can run itself. Nobody pushes, merges or publishes. You do that.
 
@@ -38,7 +38,7 @@ project details. Use synthetic fixtures when proposing public examples.
 1. Pick a mailbox directory **outside** the target repository, for example `~/agent-mailbox/<project>/`. Tickets, reports and handoffs live there.
 2. Fill **one** PROJECT block from [project-block.md](project-block.md) and save it as `<mailbox>/project-config.md`. Use Template A for ROADMAP, B for DIRECTED, or C for ASK. Use separate configuration and handoff files for separate runs.
 3. Open three sessions, one per role. Choose a different vendor/model family for the reviewer than for the builder. Install the appropriate skill in each client; each skill contains its own protocol and needs no sibling skill.
-4. Start the orchestrator session with its role and your absolute configuration path: `Use the acoding-orchestrator skill with /absolute/path/to/project-config.md`. Invoke each skill in its corresponding session using your client's syntax, or ask the client to read the skill's `SKILL.md` by absolute path and use the named configuration. The orchestrator reads the saved PROJECT block and loads the DIRECTED module when needed. Builder and reviewer read only initialization instructions and the named configuration, then reply `READY: <role> — waiting for a ticket`. Initialization authorizes no ticket work.
+4. Start the orchestrator session with its role and your absolute configuration path: `Use the acoder-orchestrator skill with /absolute/path/to/project-config.md`. Invoke each skill in its corresponding session using your client's syntax, or ask the client to read the skill's `SKILL.md` by absolute path and use the named configuration. The orchestrator reads the saved PROJECT block and loads the DIRECTED module when needed. Builder and reviewer read only initialization instructions and the named configuration, then reply `READY: <role> — waiting for a ticket`. Initialization authorizes no ticket work.
 5. Keep durable owner-approved configuration changes in the saved file so fresh sessions receive them. The file is plain text; do not include credentials.
 
 ## The loop
@@ -107,7 +107,7 @@ Triage choices for each candidate are FIX, DEFER, ACCEPT or REJECT. A suspected 
 
 When a stage meets the closure conditions the orchestrator writes the handoff and prints a `STAGE CLOSED` block with the decisions it needs from you. Then:
 
-- Start a **fresh orchestrator session** and invoke the `acoding-orchestrator` skill with the saved configuration path. It loads the required instructions, resumes from the handoff and checks it against Git; Git wins on any difference.
+- Start a **fresh orchestrator session** and invoke the `acoder-orchestrator` skill with the saved configuration path. It loads the required instructions, resumes from the handoff and checks it against Git; Git wins on any difference.
 - Start a **fresh builder session** for the next stage, and a new reviewer session per review. Invoke each role skill with the saved configuration path again.
 - The old orchestrator session issues no more tickets unless you say `continue`.
 
@@ -116,7 +116,7 @@ At the end the orchestrator writes a wrap-up in plain language: for ROADMAP runs
 ## Troubleshooting
 
 - *Tag mismatch or "stop and report":* the pointer, the card and the ticket header must agree. Ask the orchestrator to reissue the ticket (a new `rN`).
-- *Orchestrator cannot load the directed module:* check that the complete `acoding-orchestrator` folder, including `references/directed.md`, is installed.
+- *Orchestrator cannot load the directed module:* check that the complete `acoder-orchestrator` folder, including `references/directed.md`, is installed.
 - *Handoff belongs to a different run:* the orchestrator says so and does not resume it. Name a run-specific handoff file.
 
 ## License

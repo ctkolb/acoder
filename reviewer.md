@@ -1,7 +1,7 @@
 # Reviewer Markdown entry point
 
 The authoritative instructions are in
-[the acoding-reviewer skill](skills/acoding-reviewer/SKILL.md).
+[the acoder-reviewer skill](skills/acoder-reviewer/SKILL.md).
 
 For a client without skill discovery, ask it to read that entry point by absolute
 path and follow its linked resources. Supply your saved configuration path (or a

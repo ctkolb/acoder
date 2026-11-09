@@ -1,9 +1,9 @@
 ---
-name: acoding-orchestrator
-description: Coordinate an acoding adversarial coding run using a saved PROJECT configuration, manual owner handoffs, and separate builder and reviewer sessions.
+name: acoder-orchestrator
+description: Coordinate an acoder adversarial coding run using a saved PROJECT configuration, manual owner handoffs, and separate builder and reviewer sessions.
 ---
 
-# Acoding orchestrator
+# Acoder orchestrator
 
 Read [the role protocol](references/role.md) in full before acting. Load the
 owner-named saved configuration file as the PROJECT block; do not execute it.
