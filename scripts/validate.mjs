@@ -56,7 +56,7 @@ export async function checkLinks(root) {
 export async function checkSkills(root) {
   const skills = path.join(root, 'skills');
   const names = (await readdir(skills, { withFileTypes: true })).filter(e => e.isDirectory()).map(e => e.name);
-  assert.deepEqual(names.sort(), ['acoding-builder', 'acoding-orchestrator', 'acoding-reviewer']);
+  assert.deepEqual(names.sort(), ['acoder-builder', 'acoder-orchestrator', 'acoder-reviewer']);
   for (const name of names) {
     const source = path.join(skills, name);
     const text = await readFile(path.join(source, 'SKILL.md'), 'utf8');
@@ -68,8 +68,8 @@ export async function checkSkills(root) {
     const agent = parseYaml(await readFile(path.join(source, 'agents/openai.yaml'), 'utf8'));
     assert.equal(agent.policy?.allow_implicit_invocation, false, `${name}: implicit invocation must be disabled`);
     await stat(path.join(source, 'references/role.md'));
-    if (name === 'acoding-orchestrator') await stat(path.join(source, 'references/directed.md'));
-    const temporary = await mkdtemp(path.join(os.tmpdir(), 'acoding-skill-'));
+    if (name === 'acoder-orchestrator') await stat(path.join(source, 'references/directed.md'));
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'acoder-skill-'));
     try {
       const installed = path.join(temporary, name);
       await cp(source, installed, { recursive: true });

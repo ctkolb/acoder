@@ -9,7 +9,7 @@ import { checkExamples, checkLinks, checkSkills, validate } from './validate.mjs
 const root = fileURLToPath(new URL('../', import.meta.url));
 
 async function fixture(t) {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), 'acoding-check-test-'));
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'acoder-check-test-'));
   t.after(() => rm(temporary, { recursive: true, force: true }));
   for (const directory of ['skills', 'examples']) {
     await cp(path.join(root, directory), path.join(temporary, directory), { recursive: true });
@@ -41,15 +41,15 @@ test('missing links and anchors fail; fenced examples do not create links', asyn
 
 test('skill dependencies on sibling packages fail isolated installation', async t => {
   const directory = await fixture(t);
-  const file = path.join(directory, 'skills/acoding-builder/SKILL.md');
-  await writeFile(file, (await readFile(file, 'utf8')) + '\n[Sibling](../acoding-reviewer/SKILL.md)\n');
+  const file = path.join(directory, 'skills/acoder-builder/SKILL.md');
+  await writeFile(file, (await readFile(file, 'utf8')) + '\n[Sibling](../acoder-reviewer/SKILL.md)\n');
   await checkLinks(directory); // It exists in a checkout, but not when installed alone.
   await assert.rejects(checkSkills(directory), /link escapes package/);
 });
 
 test('implicit invocation cannot be enabled accidentally', async t => {
   const directory = await fixture(t);
-  await writeFile(path.join(directory, 'skills/acoding-builder/agents/openai.yaml'), 'policy:\n  allow_implicit_invocation: true\n');
+  await writeFile(path.join(directory, 'skills/acoder-builder/agents/openai.yaml'), 'policy:\n  allow_implicit_invocation: true\n');
   await assert.rejects(checkSkills(directory), /implicit invocation/);
 });
 

@@ -1,7 +1,7 @@
 # Orchestrator Markdown entry point
 
 The authoritative instructions are in
-[the acoding-orchestrator skill](skills/acoding-orchestrator/SKILL.md).
+[the acoder-orchestrator skill](skills/acoder-orchestrator/SKILL.md).
 
 For a client without skill discovery, ask it to read that entry point by absolute
 path and follow its linked resources. Supply your saved configuration path (or a

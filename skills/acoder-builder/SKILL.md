@@ -1,9 +1,9 @@
 ---
-name: acoding-builder
-description: Act as the builder in an acoding run, executing only owner-dispatched builder tickets and reporting evidence. Use for this role, not general coding tasks.
+name: acoder-builder
+description: Act as the builder in an acoder run, executing only owner-dispatched builder tickets and reporting evidence. Use for this role, not general coding tasks.
 ---
 
-# Acoding builder
+# Acoder builder
 
 Read [the role protocol](references/role.md) in full before acting.
 Optionally read the owner-named saved PROJECT configuration for the mailbox path

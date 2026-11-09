@@ -62,7 +62,7 @@ export async function scanSecrets(root, range) {
   const version = execFileSync('gitleaks', ['version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   const match = version.match(/^v?(\d+)\.(\d+)\.(\d+)/);
   assert.ok(match && (Number(match[1]) > 8 || Number(match[1]) === 8 && (Number(match[2]) > 30 || Number(match[2]) === 30 && Number(match[3]) >= 1)), 'Install Gitleaks 8.30.1 or newer');
-  const temporary = await mkdtemp(path.join(os.tmpdir(), 'acoding-secrets-'));
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'acoder-secrets-'));
   try {
     // Use default rules, not ignore/config files from the outgoing commits.
     await writeFile(path.join(temporary, 'config.toml'), '[extend]\nuseDefault = true\n');
@@ -80,7 +80,7 @@ export async function scanSecrets(root, range) {
 }
 
 export async function checkCommit(root, commit) {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), 'acoding-push-'));
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'acoder-push-'));
   try {
     const archive = git(root, ['archive', '--format=tar', commit], { encoding: null });
     execFileSync('tar', ['-xf', '-', '-C', temporary], { input: archive, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer });

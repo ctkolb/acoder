@@ -1,9 +1,9 @@
 ---
-name: acoding-reviewer
-description: Act as the independent reviewer in an acoding run, reviewing exports under owner-dispatched tickets and reporting evidence. Use for this role, not general code review.
+name: acoder-reviewer
+description: Act as the independent reviewer in an acoder run, reviewing exports under owner-dispatched tickets and reporting evidence. Use for this role, not general code review.
 ---
 
-# Acoding reviewer
+# Acoder reviewer
 
 Read [the role protocol](references/role.md) in full before acting.
 Optionally read the owner-named saved PROJECT configuration for the mailbox path
