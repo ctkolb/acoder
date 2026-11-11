@@ -82,7 +82,7 @@ These skills have been tested with the following model combinations:
 | Builder | GPT-6.1 Sol | |
 | Reviewer | DeepSeek V4.1 Flash | For sensitive stages: GLM-5.3 or Sonnet 5.5 |
 | | | |
-| Orchestrator | Sonnet 5.5 or GPT-6.1 Luna | |
+| Orchestrator | Sonnet 5.5 or GPT-6 Luna | |
 | Builder | DeepSeek V4.1 Flash | For sensitive stages: Sonnet 5.5 |
 | Reviewer | GPT-6 Luna | |
 
