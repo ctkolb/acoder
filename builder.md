@@ -1,7 +1,7 @@
 # Builder Markdown entry point
 
 The authoritative instructions are in
-[the acoding-builder skill](skills/acoding-builder/SKILL.md).
+[the acoder-builder skill](skills/acoder-builder/SKILL.md).
 
 For a client without skill discovery, ask it to read that entry point by absolute
 path and follow its linked resources. Supply your saved configuration path (or a

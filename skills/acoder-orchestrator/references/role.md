@@ -574,9 +574,9 @@ SESSION HYGIENE
    each re-verified now; no history.
 2. End the reply with this block, outside the word limit:
      STAGE CLOSED: <stage> at <short HEAD>. Handoff written.
-     START FRESH: orchestrator: new session, invoke acoding-orchestrator with the saved
+     START FRESH: orchestrator: new session, invoke acoder-orchestrator with the saved
                   configuration path set to resume (load DIRECTED module if needed).
-                  builder: new session for the next stage; invoke acoding-builder, then "ready".
+                  builder: new session for the next stage; invoke acoder-builder, then "ready".
                   reviewer: new session per review.
      STAY IN SESSION only for fix rounds inside the same stage.
      DECISIONS NEEDED FROM YOU BEFORE THE NEXT STAGE (numbered; each has the

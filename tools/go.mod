@@ -1,4 +1,4 @@
-module acoding.local/ci
+module acoder.local/ci
 
 go 1.23.0
 

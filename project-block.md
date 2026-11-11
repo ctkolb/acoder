@@ -6,7 +6,7 @@ per run when objectives differ. This is plain text configuration, not executable
 code. Do not save all three templates as one configuration.
 
 Start the orchestrator with:
-  $acoding-orchestrator use /absolute/path/to/project-config.md
+  $acoder-orchestrator use /absolute/path/to/project-config.md
 
 The first line after PROJECT, "Run type", decides how the run gets its scope:
   ROADMAP    roadmap, backlog and recorded decisions
