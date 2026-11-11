@@ -44,6 +44,8 @@ Individual checks are available as `npm run lint:markdown`, `npm run validate`,
 - Regression tests that deliberately break links, packages, metadata, reports
   and ticket history to verify that the checks reject them.
 - GitHub Actions workflow syntax and expressions through actionlint.
+- The mutation runner's own tests: a known kill, a survivor, the neutral control and
+  the INVALID cases (missing anchor, load error, zero or skipped tests, timeout).
 
 The example checker is specific to the shipped S1 walkthrough. It never executes
 commands from reports or resolves hypothetical mailbox/scratch evidence. It is

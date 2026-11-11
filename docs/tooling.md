@@ -1,7 +1,9 @@
 # Project tooling contracts
 
 Supply project-specific commands in the PROJECT block. This release documents
-interfaces; it contains no production runners. Use approved existing tools where
+interfaces. The only runner it ships is a mutation runner for Node.js test suites
+(see below); verification and report-validation commands remain project inputs. Use
+approved existing tools where
 possible. Missing tooling may be built through an authorized tooling ticket and
 reviewed before use. A report-only run instead records missing capabilities and
 uses manual inspection where permitted.
@@ -49,6 +51,12 @@ missing anchors, invalid paths, zero tests, setup failures and timeouts are
 INVALID. A SURVIVED mutation requires investigation; EQUIVALENT requires a
 specific rationale. A surviving deliberately neutral control is separate from
 a required behavioral mutation. Exit nonzero for invalid or unexpected outcomes.
+
+`npm run mutants -- --mutants <file> --out <file>` implements this contract for
+suites run with `node --test`. Each mutation's modules are test files. A run with a
+skipped test, a load error, fewer tests than the baseline or a timeout is INVALID. The
+runner adds a neutral control and writes one JSON result file. It is repository
+tooling; other projects name their own runner in the PROJECT block.
 
 ## Report validator
 

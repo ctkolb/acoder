@@ -10,6 +10,7 @@
     "lint:markdown": "markdownlint-cli2",
     "validate": "node scripts/validate.mjs",
     "test": "node --test scripts/*.test.mjs",
+    "mutants": "node scripts/mutants.mjs",
     "hooks:install": "node scripts/install-hooks.mjs",
     "lint:workflows": "go -C tools run github.com/rhysd/actionlint/cmd/actionlint"
   },
