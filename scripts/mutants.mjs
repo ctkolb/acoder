@@ -167,17 +167,30 @@ async function copyRoot(root, destination) {
   if (await lstat(modules).then(() => true, () => false)) await symlink(await realpath(modules), path.join(destination, 'node_modules'), 'dir');
 }
 
-// One `node --test` run of `modules` in `directory`; counts come from the reporter events, never from the console.
+// The --after-each-script hook runs in the root after every test run, also after a time-out, under the same time limit.
+async function afterEach(context, name, label) {
+  const script = context.afterEachScript;
+  if (script === null) return null;
+  const outcome = await launch('npm', ['run', '--silent', script], {
+    cwd: context.root, env: { ...process.env, MUTANT_NAME: name }, log: path.join(context.session, `${label}.hook.log`), timeoutSeconds: context.timeoutSeconds,
+  });
+  if (outcome.error) return `could not start npm: ${outcome.error.message}`;
+  if (outcome.timedOut) return `npm run ${script} exceeded ${context.timeoutSeconds} seconds`;
+  return outcome.code === 0 ? null : `npm run ${script} exited with ${outcome.code ?? outcome.signal}`;
+}
+
+// One `node --test` run of `modules` in `directory` (module paths never start with `-`, see validateMutants); counts come from the reporter events, never from the console.
 async function testRun(context, { directory, modules, name, label }) {
   const events = path.join(context.session, `${label}.events`);
   const outcome = await launch(process.execPath, [
-    '--test', `--test-reporter=${import.meta.filename}`, `--test-reporter-destination=${events}`, '--', ...modules,
+    '--test', `--test-reporter=${import.meta.filename}`, `--test-reporter-destination=${events}`, ...modules,
   ], { cwd: directory, env: { ...process.env, MUTANT_NAME: name }, log: path.join(context.session, `${label}.log`), timeoutSeconds: context.timeoutSeconds });
+  const hook = await afterEach(context, name, label);
   const lines = (await readFile(events, 'utf8').catch(() => '')).split('\n').filter(Boolean);
   let parsed;
   try { parsed = lines.map(line => JSON.parse(line)); } catch { parsed = null; }
   const summary = summarizeEvents(parsed ?? [], await realpath(directory));
-  return { exit_code: outcome.code ?? -1, timedOut: outcome.timedOut, error: outcome.error?.message ?? (parsed === null ? 'unreadable test events' : null), summary };
+  return { exit_code: outcome.code ?? -1, timedOut: outcome.timedOut, hook, error: outcome.error?.message ?? (parsed === null ? 'unreadable test events' : null), summary };
 }
 
 // ---- Baseline ---------------------------------------------------------------------------------------------------
@@ -198,7 +211,7 @@ const sameCounts = (a, b) => Object.keys(emptyCounts()).every(key => a[key] === 
 // A module has a usable baseline only when both clean runs ran it, agree on its counts, and it ran at least one test
 // with no failure, skip or cancellation. A timed-out or crashed run, or a non-zero exit with no failing test, taints all.
 function baselineModules(modules, runs) {
-  const tainted = runs.some(run => run.timedOut || run.error || (run.exit_code !== 0 && run.summary.fail + run.summary.cancelled === 0));
+  const tainted = runs.some(run => run.timedOut || run.error || run.hook || (run.exit_code !== 0 && run.summary.fail + run.summary.cancelled === 0));
   return new Map(modules.map(module => {
     const [a, b] = runs.map(run => run.summary.files[module]);
     const clean = !tainted && a && b && a.tests > 0 && a.fail + a.skipped + a.cancelled === 0 && sameCounts(a, b);
@@ -210,21 +223,27 @@ function baselineModules(modules, runs) {
 
 const failedPrerequisite = explanation => ({ invalid: explanation });
 
-// The mutated text of the file, or why the mutation cannot be applied. The root is only read, never written, and the
-// path must reach a regular file without passing through a symbolic link, so the copy cannot lead back to the root.
-async function mutatedText(root, mutant) {
+// The text of a file of the root, or why it cannot be used. The root is only read, never written, and the path must
+// reach a regular file without passing through a symbolic link, so a copy cannot lead back to the root.
+async function sourceText(root, file) {
   let current = root;
-  const segments = mutant.file.split('/');
+  const segments = file.split('/');
   for (const [index, segment] of segments.entries()) {
     current = path.join(current, segment);
     const info = await lstat(current).catch(() => null);
-    if (info === null) return failedPrerequisite(`${mutant.file} does not exist`);
-    if (info.isSymbolicLink()) return failedPrerequisite(`${mutant.file} passes through a symbolic link`);
-    if (index === segments.length - 1 ? !info.isFile() : !info.isDirectory()) return failedPrerequisite(`${mutant.file} is not a regular file inside the root`);
+    if (info === null) return failedPrerequisite(`${file} does not exist`);
+    if (info.isSymbolicLink()) return failedPrerequisite(`${file} passes through a symbolic link`);
+    if (index === segments.length - 1 ? !info.isFile() : !info.isDirectory()) return failedPrerequisite(`${file} is not a regular file inside the root`);
   }
   const buffer = await readFile(current);
   const text = buffer.toString('utf8');
-  if (!Buffer.from(text, 'utf8').equals(buffer)) return failedPrerequisite(`${mutant.file} is not UTF-8 text`);
+  return Buffer.from(text, 'utf8').equals(buffer) ? { text } : failedPrerequisite(`${file} is not UTF-8 text`);
+}
+
+async function mutatedText(root, mutant) {
+  const source = await sourceText(root, mutant.file);
+  if (source.invalid) return source;
+  const { text } = source;
   let occurrences = 0;
   for (let at = text.indexOf(mutant.anchor); at !== -1; at = text.indexOf(mutant.anchor, at + 1)) occurrences++;
   if (occurrences !== 1) return failedPrerequisite(`the anchor occurs ${occurrences} times in ${mutant.file}`);
@@ -258,6 +277,7 @@ const sumCounts = (usable, modules) => modules.reduce((total, module) => {
 // failing test in either clean run, so a failing test here is never one that already failed there.
 function judge(run, expected, timeoutSeconds) {
   const { summary } = run;
+  if (run.hook) return { kind: 'invalid', detail: `hook: ${run.hook}`, explanation: run.hook };
   if (run.timedOut) return { kind: 'invalid', detail: 'timeout', explanation: `the run exceeded ${timeoutSeconds} seconds` };
   const setup = explanation => ({ kind: 'invalid', detail: 'setup', explanation });
   if (run.error) return setup(run.error);
@@ -274,30 +294,59 @@ const runRecord = ({ exit_code, summary }) => ({
   failing_tests: summary.failing_tests, assertion_failures: summary.assertion_failures,
 });
 
-async function evaluate(context, mutant, usable, index) {
-  const prepared = await mutatedText(context.root, mutant);
-  if (prepared.invalid) return invalidResult(mutant, 'anchor', prepared.invalid);
-  const expected = sumCounts(usable, mutant.modules);
+// Runs a mutant twice (a second time only while the first run is valid) and judges each run on its own.
+async function runTwice(context, mutant, text, expected, label) {
   const runs = [], verdicts = [];
   for (const number of [1, 2]) {
-    const run = await mutantRun(context, mutant, prepared.text, `mutant-${index}-${number}`);
+    const run = await mutantRun(context, mutant, text, `${label}-${number}`);
     runs.push(run);
     verdicts.push(judge(run, expected, context.timeoutSeconds));
     if (verdicts.at(-1).kind === 'invalid') break;
   }
+  return { runs, verdicts };
+}
+
+// KILLED needs the same assertion failures in both runs; any disagreement or invalid run is INVALID, never a kill.
+function settle(verdicts) {
   const [first, second] = verdicts;
-  const settled = verdicts.at(-1);
-  let result, detail = null, explanation = null;
-  if (settled.kind === 'invalid') [result, detail, explanation] = ['INVALID', settled.detail, settled.explanation];
-  else if (first.kind !== second.kind || (first.kind === 'failed' && first.failing.join('\n') !== second.failing.join('\n'))) {
-    [result, detail, explanation] = ['INVALID', 'unstable', 'two runs of the same mutant disagree'];
-  } else result = first.kind === 'survived' ? 'SURVIVED' : 'KILLED';
+  const last = verdicts.at(-1);
+  if (last.kind === 'invalid') return { outcome: 'INVALID', detail: last.detail, explanation: last.explanation };
+  if (first.kind !== second.kind || (first.kind === 'failed' && first.failing.join('\n') !== second.failing.join('\n'))) {
+    return { outcome: 'INVALID', detail: 'unstable', explanation: 'two runs of the same mutant disagree' };
+  }
+  return { outcome: first.kind === 'survived' ? 'SURVIVED' : 'KILLED', detail: null, explanation: null };
+}
+
+async function evaluate(context, mutant, usable, index) {
+  const prepared = await mutatedText(context.root, mutant);
+  if (prepared.invalid) return invalidResult(mutant, 'anchor', prepared.invalid);
+  const { runs, verdicts } = await runTwice(context, mutant, prepared.text, sumCounts(usable, mutant.modules), `mutant-${index}`);
+  const { outcome, detail, explanation } = settle(verdicts);
+  const equivalent = outcome === 'SURVIVED' && mutant.expect === 'EQUIVALENT' && mutant.why.trim() !== '';
   const { summary } = runs[0];
   return {
-    name: mutant.name, file: mutant.file, expect: mutant.expect, result, detail, tests: summary.tests,
+    name: mutant.name, file: mutant.file, expect: mutant.expect, result: equivalent ? 'EQUIVALENT' : outcome, detail, tests: summary.tests,
     assertion_failures: summary.assertion_failures, failing_tests: summary.failing_tests, reruns: runs.length - 1,
-    first_failure: explanation ?? (result === 'KILLED' ? summary.first_failure : null), runs: runs.map(runRecord),
+    first_failure: explanation ?? (outcome === 'KILLED' ? summary.first_failure : null), runs: runs.map(runRecord),
   };
+}
+
+const HASH_COMMENTS = /\.(?:sh|bash|py|rb|ya?ml|toml|conf|ini)$/;
+
+// The neutral control appends one comment line to the first mutated file and must survive on every usable module.
+// It is not a mutant: it has no entry in the result list. Returns null when there is nothing to run it on.
+async function runControl(context, mutants, usable, modules) {
+  const controlModules = modules.filter(module => usable.get(module) !== null);
+  if (controlModules.length === 0) return null;
+  for (const { file } of mutants) {
+    const source = await sourceText(context.root, file);
+    if (source.invalid) continue;
+    const comment = HASH_COMMENTS.test(file) ? '# acoder-mutants neutral control' : '// acoder-mutants neutral control';
+    const text = `${source.text}${source.text.endsWith('\n') ? '' : '\n'}${comment}\n`;
+    const { verdicts } = await runTwice(context, { name: CONTROL_NAME, file, modules: controlModules }, text, sumCounts(usable, controlModules), 'control');
+    return settle(verdicts).outcome;
+  }
+  return null;
 }
 
 export async function run(options, mutants) {
@@ -308,12 +357,17 @@ export async function run(options, mutants) {
     const modules = [...new Set(mutants.flatMap(mutant => mutant.modules))];
     const runs = await baselineRuns(context, modules);
     const usable = baselineModules(modules, runs);
+    const control = await runControl(context, mutants, usable, modules);
     const results = [];
     for (const [index, mutant] of mutants.entries()) {
+      if (control !== null && control !== 'SURVIVED') {
+        results.push(invalidResult(mutant, 'control', `the neutral control did not survive (${control})`));
+        continue;
+      }
       const prepared = mutant.modules.some(module => usable.get(module) === null) ? null : true;
       results.push(prepared === null ? invalidResult(mutant, 'baseline', 'a baseline of its modules is not valid') : await evaluate(context, mutant, usable, index));
     }
-    return finish(options, runs, modules, results);
+    return finish(options, runs, modules, control ?? 'INVALID', results);
   } finally {
     sessions.delete(session);
     await rm(session, { recursive: true, force: true });
@@ -327,7 +381,7 @@ function invalidResult(mutant, detail, explanation) {
   };
 }
 
-async function finish(options, runs, modules, mutants) {
+async function finish(options, runs, modules, control, mutants) {
   const count = result => mutants.filter(mutant => mutant.result === result).length;
   const summary = {
     killed: count('KILLED'), survived: count('SURVIVED'), equivalent: count('EQUIVALENT'), invalid: count('INVALID'),
@@ -336,7 +390,7 @@ async function finish(options, runs, modules, mutants) {
   const result = {
     format: FORMAT, root: options.root,
     baseline: runs.map(({ exit_code, summary: { tests, pass, fail, skipped, cancelled } }) => ({ modules, tests, pass, fail, skipped, cancelled, exit_code })),
-    control: { result: 'INVALID' }, mutants, summary,
+    control: { result: control }, mutants, summary,
   };
   await writeFile(options.out, `${JSON.stringify(result, null, 2)}\n`, { flag: 'wx' }).catch(error => {
     throw new UsageError(`cannot create ${options.out}: ${error.code ?? error.message}`);

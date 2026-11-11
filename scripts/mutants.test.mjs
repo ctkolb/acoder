@@ -446,7 +446,7 @@ async function realpathOf(file) {
   return realpath(file);
 }
 
-test('mutants: neutral control survives', { timeout: 100_000, todo: 'cut point 3' }, async t => {
+test('mutants: neutral control survives', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [mutant('kill')] });
   const run = execute(fx);
   const result = await resultOf(fx, run);
@@ -462,7 +462,7 @@ test('mutants: neutral control survives', { timeout: 100_000, todo: 'cut point 3
   }
 });
 
-test('mutants: a broken control invalidates the run', { timeout: 100_000, todo: 'cut point 3' }, async t => {
+test('mutants: a broken control invalidates the run', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [
     mutant('kill', { modules: [CALC, 'test/pristine.test.mjs'] }),
     survivor('survive', { modules: [CALC, 'test/pristine.test.mjs'] }),
@@ -478,7 +478,7 @@ test('mutants: a broken control invalidates the run', { timeout: 100_000, todo: 
   assert.equal(run.status, 1);
 });
 
-test('mutants: an expected EQUIVALENT that is killed is unexpected', { timeout: 100_000, todo: 'cut point 3' }, async t => {
+test('mutants: an expected EQUIVALENT that is killed is unexpected', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [
     mutant('claimed-equivalent', { expect: 'EQUIVALENT', why: 'believed harmless' }),
     survivor('real-equivalent', { expect: 'EQUIVALENT', why: 'mul has no caller' }),
@@ -522,7 +522,7 @@ function assertSchema(result, fx) {
   }
 }
 
-test('mutants: the result file matches the schema and the exit code rule', { timeout: 120_000, todo: 'cut point 3' }, async t => {
+test('mutants: the result file matches the schema and the exit code rule', { timeout: 120_000 }, async t => {
   const fx = await fixture(t, { mutants: [
     mutant('kill'),
     survivor('equivalent', { expect: 'EQUIVALENT', why: 'mul has no caller' }),
@@ -547,7 +547,7 @@ test('mutants: the result file matches the schema and the exit code rule', { tim
   assert.deepEqual((await resultOf(fx, unexpected)).summary, { killed: 1, survived: 1, equivalent: 0, invalid: 0, unexpected: 1 });
 });
 
-test('mutants: the caller environment and MUTANT_NAME reach every test run', { timeout: 100_000, todo: 'cut point 3' }, async t => {
+test('mutants: the caller environment and MUTANT_NAME reach every test run', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [mutant('kill'), survivor('survive')] });
   const run = execute(fx, standard(fx), { env: { ACODER_PROBE: 'probe-value' } });
   await resultOf(fx, run);
@@ -558,7 +558,7 @@ test('mutants: the caller environment and MUTANT_NAME reach every test run', { t
   assert.ok(seen.every(entry => entry.probe === 'probe-value'));
 });
 
-test('mutants: --after-each-script runs after every test run, in the root, with MUTANT_NAME', { timeout: 100_000, todo: 'cut point 3' }, async t => {
+test('mutants: --after-each-script runs after every test run, in the root, with MUTANT_NAME', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [mutant('kill'), mutant('bad-anchor', { anchor: 'nothing like it' })] });
   const run = execute(fx, [...standard(fx), '--after-each-script', 'hook']);
   const result = await resultOf(fx, run);
@@ -616,7 +616,7 @@ test('mutants-flaky: baseline runs that disagree in counts make dependent mutant
   assert.notEqual(result.baseline[0].tests, result.baseline[1].tests, 'both baseline runs are recorded');
 });
 
-test('mutants-flaky: a timeout, a setup failure and a hook failure in the second run are INVALID', { timeout: 120_000, todo: 'cut point 3' }, async t => {
+test('mutants-flaky: a timeout, a setup failure and a hook failure in the second run are INVALID', { timeout: 120_000 }, async t => {
   const fx = await fixture(t, { mutants: [
     flaky('timeout', 'second-timeout'),
     flaky('setup', 'second-setup'),
