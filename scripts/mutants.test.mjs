@@ -36,8 +36,9 @@ const count = readFileSync(log, 'utf8').split('\\n').filter(line => line.startsW
 if (name === process.env.FAIL_HOOK && count === Number(process.env.FAIL_HOOK_AT)) process.exit(3);
 `,
   'src/calc.mjs': calc,
-  'test/observe.mjs': `import { appendFileSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+  'test/observe.mjs': `import { appendFileSync, lstatSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 export function observe() {
+  if (process.env.RACE_OUT) writeFileSync(process.env.RACE_OUT, 'created by a test');
   if (!process.env.OBS) return;
   let modules = null;
   try { modules = lstatSync('node_modules').isSymbolicLink() ? realpathSync('node_modules') : 'directory'; } catch {}
@@ -387,6 +388,29 @@ test('mutants: a load error is INVALID, not KILLED', { timeout: 100_000 }, async
     assert.equal(byName(result, name).assertion_failures, 0, name);
   }
   assert.equal(run.status, 1);
+});
+
+test('mutants: an assertion failure next to another kind of failure is INVALID, not KILLED', { timeout: 100_000 }, async t => {
+  const both = 'export const add = (a, b) => a + b;\nexport const mul = (a, b) => a * b;\nexport const work = () => 1;';
+  const fx = await fixture(t, { mutants: [mutant('assertion-and-throw', {
+    anchor: both,
+    replacement: "export const add = (a, b) => a - b;\nexport const mul = (a, b) => a * b;\nexport const work = () => { throw new Error('not an assertion'); };",
+  })] });
+  const run = execute(fx);
+  const found = byName(await resultOf(fx, run), 'assertion-and-throw');
+  assert.equal(found.result, 'INVALID');
+  assert.equal(found.detail, 'setup');
+  assert.ok(found.assertion_failures >= 1, 'the assertion failure is still recorded');
+  assert.equal(run.status, 1);
+});
+
+test('mutants: a result file that appears during the run is never overwritten', { timeout: 100_000 }, async t => {
+  const fx = await fixture(t, { mutants: [mutant('kill')] });
+  const run = execute(fx, standard(fx), { env: { RACE_OUT: fx.out } });
+  assert.equal(run.status, 2, run.stderr);
+  assert.equal(run.stderr.trim().split('\n').length, 1);
+  assert.equal(await readFile(fx.out, 'utf8'), 'created by a test');
+  assert.deepEqual(await readdir(fx.tmp), [], 'the copies were removed');
 });
 
 test('mutants: fewer tests, more tests and skipped tests than the baseline are INVALID', { timeout: 100_000 }, async t => {

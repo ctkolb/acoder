@@ -367,7 +367,7 @@ export async function run(options, mutants) {
       const prepared = mutant.modules.some(module => usable.get(module) === null) ? null : true;
       results.push(prepared === null ? invalidResult(mutant, 'baseline', 'a baseline of its modules is not valid') : await evaluate(context, mutant, usable, index));
     }
-    return finish(options, runs, modules, control ?? 'INVALID', results);
+    return await finish(options, runs, modules, control ?? 'INVALID', results);
   } finally {
     sessions.delete(session);
     await rm(session, { recursive: true, force: true });
