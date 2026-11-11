@@ -68,17 +68,23 @@ The orchestrator writes only inside the mailbox. The builder commits only on a n
 
 ## Model Recommendations
 
-The consumption of each role is Orchestrator < Reviewer < Builder. In my experience the split is about 5% Orchestrator, 40% Reviewer, 55% Builder. More expensive frontier models are not necessarily all that more useful for Orchestrator or Reviewer. You may get marginal improvements but the cost may not be worth it. Check benchmarks. Remember that the orchestrator will automatically be more careful with the higher-risk portions, and if the reviewer or builder causes problems with rework multiple times in a row you can always shift to a stronger model.
+The most important part of this system is that the vendor for the Builder model needs to be different from the vendor of the Reviewer model. Choosing which model to use should be considered based on the complexity of the code, sensitivity of the project, and your budget. Just keep in mind that more expensive does not necessarily mean stronger for all roles. Especially for Orchestrator and Reviewer, some of the cheaper models from the popular vendors get better benchmarks.
 
-This has been tested with the following model combinations:
+These skills have been tested with the following model combinations:
 
-| Circumstance | Orchestrator | Builder | Reviewer |
-|---|---|---|---|
-| Low stakes / Low-budget | Sonnet 5.5 | DeepSeek V4.1 Flash | GLM-5.3 |
-| Sensitive | Sonnet 5.5 | Sonnet 5.5 | GPT-6 Luna |
-| Sensitive alt | GPT-6 Terra | GPT-6.1 Sol | Sonnet 5.5 |
-
-I do plan to test using Opus, Astra, etc. but I haven’t had the need yet. It likely is fine.
+| Role | Model | Notes |
+|---|---|---|
+| Orchestrator | Sonnet 5.5 or GPT-6 Luna | |
+| Builder | Sonnet 5.5 | |
+| Reviewer | GPT-6 Luna | |
+| | | |
+| Orchestrator | Sonnet 5.5 or GPT-6 Luna | |
+| Builder | GPT-6.1 Sol | |
+| Reviewer | DeepSeek V4.1 Flash | For sensitive stages: GLM-5.3 or Sonnet 5.5 |
+| | | |
+| Orchestrator | Sonnet 5.5 or GPT-6.1 Luna | |
+| Builder | DeepSeek V4.1 Flash | For sensitive stages: Sonnet 5.5 |
+| Reviewer | GPT-6 Luna | |
 
 ## DIRECTED run options (Template B)
 
