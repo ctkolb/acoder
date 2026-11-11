@@ -260,7 +260,7 @@ test('mutants: the mutants file shape is validated before anything runs', { time
   assert.deepEqual(await snapshot(fx.root), before);
 });
 
-test('mutants: a zero-test and a skip-only module are INVALID', { timeout: 100_000, todo: 'cut point 2' }, async t => {
+test('mutants: a zero-test and a skip-only module are INVALID', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [
     mutant('zero', { modules: ['test/empty.test.mjs'] }),
     mutant('skip-only', { modules: ['test/skip.test.mjs'] }),
@@ -281,7 +281,7 @@ test('mutants: a zero-test and a skip-only module are INVALID', { timeout: 100_0
   assert.equal(run.status, 1);
 });
 
-test('mutants: a hanging test is INVALID by timeout', { timeout: 100_000, todo: 'cut point 2' }, async t => {
+test('mutants: a hanging test is INVALID by timeout', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [mutant('hang', {
     anchor: 'work = () => 1;',
     replacement: `work = () => {
@@ -308,7 +308,7 @@ test('mutants: a hanging test is INVALID by timeout', { timeout: 100_000, todo: 
   assert.deepEqual(await readdir(fx.tmp), [], 'the copy was not removed after the timeout');
 });
 
-test('mutants: known assertion kill', { timeout: 100_000, todo: 'cut point 2' }, async t => {
+test('mutants: known assertion kill', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [mutant('add-minus')] });
   const run = execute(fx);
   const result = await resultOf(fx, run);
@@ -332,7 +332,7 @@ test('mutants: known assertion kill', { timeout: 100_000, todo: 'cut point 2' },
   assert.equal(found.tests, first.tests, 'a kill runs the same number of tests as the baseline');
 });
 
-test('mutants: survivor is rerun and reported', { timeout: 100_000, todo: 'cut point 2' }, async t => {
+test('mutants: survivor is rerun and reported', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [survivor('mul-plus')] });
   const run = execute(fx);
   const result = await resultOf(fx, run);
@@ -348,7 +348,7 @@ test('mutants: survivor is rerun and reported', { timeout: 100_000, todo: 'cut p
   assert.equal(run.status, 1);
 });
 
-test('mutants: missing and duplicate anchors are INVALID', { timeout: 100_000, todo: 'cut point 2' }, async t => {
+test('mutants: missing and duplicate anchors are INVALID', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [
     mutant('absent-anchor', { anchor: 'no such text' }),
     mutant('duplicate-anchor', { anchor: 'export const' }),
@@ -372,7 +372,7 @@ test('mutants: missing and duplicate anchors are INVALID', { timeout: 100_000, t
   assert.equal(run.status, 1);
 });
 
-test('mutants: a load error is INVALID, not KILLED', { timeout: 100_000, todo: 'cut point 2' }, async t => {
+test('mutants: a load error is INVALID, not KILLED', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [
     mutant('syntax-error', { replacement: 'a +* b' }),
     mutant('missing-import', { anchor: 'export const CASES = 2;', replacement: "import 'node:no-such-module';\nexport const CASES = 2;" }),
@@ -389,7 +389,7 @@ test('mutants: a load error is INVALID, not KILLED', { timeout: 100_000, todo: '
   assert.equal(run.status, 1);
 });
 
-test('mutants: fewer tests, more tests and skipped tests than the baseline are INVALID', { timeout: 100_000, todo: 'cut point 2' }, async t => {
+test('mutants: fewer tests, more tests and skipped tests than the baseline are INVALID', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [
     mutant('fewer', { anchor: 'CASES = 2;', replacement: 'CASES = 1;' }),
     mutant('more', { anchor: 'CASES = 2;', replacement: 'CASES = 3;' }),
@@ -419,7 +419,7 @@ test('mutants: cancelled tests are counted and are not assertion failures', () =
   assert.deepEqual(summary.failing_tests.length, 1);
 });
 
-test('mutants: the root is unchanged', { timeout: 100_000, todo: 'cut point 2' }, async t => {
+test('mutants: the root is unchanged', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [
     mutant('kill'), survivor('survive'),
     mutant('bad-anchor', { anchor: 'nothing like it' }),
@@ -584,7 +584,7 @@ test('mutants: --after-each-script runs after every test run, in the root, with 
   }
 });
 
-test('mutants-flaky: an unrelated assertion that fails once is INVALID, not KILLED', { timeout: 100_000, todo: 'cut point 2' }, async t => {
+test('mutants-flaky: an unrelated assertion that fails once is INVALID, not KILLED', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [
     mutant('killed-but-flaky', { modules: [CALC, 'test/other.test.mjs'] }),
     flaky('assertion', 'fails-once'),
@@ -603,7 +603,7 @@ test('mutants-flaky: an unrelated assertion that fails once is INVALID, not KILL
   assert.equal(run.status, 1);
 });
 
-test('mutants-flaky: baseline runs that disagree in counts make dependent mutants INVALID', { timeout: 100_000, todo: 'cut point 2' }, async t => {
+test('mutants-flaky: baseline runs that disagree in counts make dependent mutants INVALID', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [
     mutant('depends-on-count', { modules: [CALC, 'test/count.test.mjs'] }),
     mutant('independent'),

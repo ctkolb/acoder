@@ -208,8 +208,96 @@ function baselineModules(modules, runs) {
 
 // ---- Main ----------------------------------------------------------------------------------------------------------
 
-async function evaluate() {
-  throw new Error('mutant classification is not implemented');
+const failedPrerequisite = explanation => ({ invalid: explanation });
+
+// The mutated text of the file, or why the mutation cannot be applied. The root is only read, never written, and the
+// path must reach a regular file without passing through a symbolic link, so the copy cannot lead back to the root.
+async function mutatedText(root, mutant) {
+  let current = root;
+  const segments = mutant.file.split('/');
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment);
+    const info = await lstat(current).catch(() => null);
+    if (info === null) return failedPrerequisite(`${mutant.file} does not exist`);
+    if (info.isSymbolicLink()) return failedPrerequisite(`${mutant.file} passes through a symbolic link`);
+    if (index === segments.length - 1 ? !info.isFile() : !info.isDirectory()) return failedPrerequisite(`${mutant.file} is not a regular file inside the root`);
+  }
+  const buffer = await readFile(current);
+  const text = buffer.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(buffer)) return failedPrerequisite(`${mutant.file} is not UTF-8 text`);
+  let occurrences = 0;
+  for (let at = text.indexOf(mutant.anchor); at !== -1; at = text.indexOf(mutant.anchor, at + 1)) occurrences++;
+  if (occurrences !== 1) return failedPrerequisite(`the anchor occurs ${occurrences} times in ${mutant.file}`);
+  if (mutant.replacement === mutant.anchor) return failedPrerequisite('the replacement equals the anchor');
+  const start = text.indexOf(mutant.anchor);
+  return { text: text.slice(0, start) + mutant.replacement + text.slice(start + mutant.anchor.length) };
+}
+
+// One run of a mutant in its own fresh copy of the root.
+async function mutantRun(context, mutant, text, label) {
+  const directory = path.join(context.session, label);
+  await copyRoot(context.root, directory);
+  try {
+    const target = path.join(directory, mutant.file);
+    const { mode } = await stat(target);
+    await rm(target);
+    await writeFile(target, text, { mode: mode & 0o777 });
+    return await testRun(context, { directory, modules: mutant.modules, name: mutant.name, label });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+const sumCounts = (usable, modules) => modules.reduce((total, module) => {
+  for (const key of Object.keys(total)) total[key] += usable.get(module)[key];
+  return total;
+}, emptyCounts());
+
+// Judges one run against the summed counts of the clean baseline of the same modules. A failing test that is not an
+// assertion failure (a load error, a thrown error, a timeout) is never evidence of a kill. The baseline modules have no
+// failing test in either clean run, so a failing test here is never one that already failed there.
+function judge(run, expected, timeoutSeconds) {
+  const { summary } = run;
+  if (run.timedOut) return { kind: 'invalid', detail: 'timeout', explanation: `the run exceeded ${timeoutSeconds} seconds` };
+  const setup = explanation => ({ kind: 'invalid', detail: 'setup', explanation });
+  if (run.error) return setup(run.error);
+  if (summary.other_failures > 0) return setup(summary.first_failure ?? 'a test failed without an assertion failure');
+  if (summary.skipped > 0 || summary.cancelled > 0) return setup(`${summary.skipped} skipped and ${summary.cancelled} cancelled tests`);
+  if (summary.tests !== expected.tests) return setup(`${summary.tests} tests ran; the baseline ran ${expected.tests}`);
+  if (run.exit_code === 0 && summary.fail === 0) return { kind: 'survived' };
+  if (summary.assertion_failures > 0 && run.exit_code !== 0) return { kind: 'failed', failing: summary.failing_tests };
+  return setup(`exit code ${run.exit_code} without a failing test`);
+}
+
+const runRecord = ({ exit_code, summary }) => ({
+  exit_code, tests: summary.tests, pass: summary.pass, fail: summary.fail, skipped: summary.skipped, cancelled: summary.cancelled,
+  failing_tests: summary.failing_tests, assertion_failures: summary.assertion_failures,
+});
+
+async function evaluate(context, mutant, usable, index) {
+  const prepared = await mutatedText(context.root, mutant);
+  if (prepared.invalid) return invalidResult(mutant, 'anchor', prepared.invalid);
+  const expected = sumCounts(usable, mutant.modules);
+  const runs = [], verdicts = [];
+  for (const number of [1, 2]) {
+    const run = await mutantRun(context, mutant, prepared.text, `mutant-${index}-${number}`);
+    runs.push(run);
+    verdicts.push(judge(run, expected, context.timeoutSeconds));
+    if (verdicts.at(-1).kind === 'invalid') break;
+  }
+  const [first, second] = verdicts;
+  const settled = verdicts.at(-1);
+  let result, detail = null, explanation = null;
+  if (settled.kind === 'invalid') [result, detail, explanation] = ['INVALID', settled.detail, settled.explanation];
+  else if (first.kind !== second.kind || (first.kind === 'failed' && first.failing.join('\n') !== second.failing.join('\n'))) {
+    [result, detail, explanation] = ['INVALID', 'unstable', 'two runs of the same mutant disagree'];
+  } else result = first.kind === 'survived' ? 'SURVIVED' : 'KILLED';
+  const { summary } = runs[0];
+  return {
+    name: mutant.name, file: mutant.file, expect: mutant.expect, result, detail, tests: summary.tests,
+    assertion_failures: summary.assertion_failures, failing_tests: summary.failing_tests, reruns: runs.length - 1,
+    first_failure: explanation ?? (result === 'KILLED' ? summary.first_failure : null), runs: runs.map(runRecord),
+  };
 }
 
 export async function run(options, mutants) {
@@ -221,9 +309,9 @@ export async function run(options, mutants) {
     const runs = await baselineRuns(context, modules);
     const usable = baselineModules(modules, runs);
     const results = [];
-    for (const mutant of mutants) {
-      if (mutant.modules.some(module => usable.get(module) === null)) results.push(invalidResult(mutant, 'baseline', null));
-      else results.push(await evaluate(context, mutant, usable));
+    for (const [index, mutant] of mutants.entries()) {
+      const prepared = mutant.modules.some(module => usable.get(module) === null) ? null : true;
+      results.push(prepared === null ? invalidResult(mutant, 'baseline', 'a baseline of its modules is not valid') : await evaluate(context, mutant, usable, index));
     }
     return finish(options, runs, modules, results);
   } finally {
