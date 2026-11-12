@@ -79,6 +79,22 @@ if (!again) writeFileSync(seen, '1');
 test('count base', () => {});
 if (again) test('count extra', () => {});
 `,
+  'test/grow.test.mjs': `import test from 'node:test';
+import { existsSync, writeFileSync } from 'node:fs';
+const seen = process.env.FLAKE + '/grow-seen';
+const again = existsSync(seen);
+if (!again) writeFileSync(seen, '1');
+test('grow base', () => {});
+if (again) test('grow extra', () => {});
+`,
+  'test/shrink.test.mjs': `import test from 'node:test';
+import { existsSync, writeFileSync } from 'node:fs';
+const seen = process.env.FLAKE + '/shrink-seen';
+const again = existsSync(seen);
+if (!again) writeFileSync(seen, '1');
+test('shrink base', () => {});
+if (!again) test('shrink extra', () => {});
+`,
   'test/other.test.mjs': `import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, writeFileSync } from 'node:fs';
@@ -652,6 +668,27 @@ test('mutants-flaky: baseline runs that disagree in counts make dependent mutant
   assert.equal(byName(result, 'depends-on-count').detail, 'baseline');
   assert.equal(byName(result, 'independent').result, 'KILLED');
   assert.notEqual(result.baseline[0].tests, result.baseline[1].tests, 'both baseline runs are recorded');
+});
+
+test('mutants-flaky: baseline counts that move in opposite directions are compared per module', { timeout: 100_000 }, async t => {
+  const GROW = 'test/grow.test.mjs', SHRINK = 'test/shrink.test.mjs';
+  const fx = await fixture(t, { mutants: [
+    mutant('depends-on-both', { modules: [GROW, SHRINK] }),
+    mutant('depends-on-grow', { modules: [CALC, GROW] }),
+    mutant('depends-on-shrink', { modules: [CALC, SHRINK] }),
+    mutant('independent'),
+  ] });
+  const run = await execute(fx);
+  const result = await resultOf(fx, run);
+  const [first, second] = result.baseline;
+  assert.equal(first.tests, second.tests, 'the totals over all modules are equal, so only a per-module comparison can notice');
+  for (const name of ['depends-on-both', 'depends-on-grow', 'depends-on-shrink']) {
+    assert.equal(byName(result, name).result, 'INVALID', name);
+    assert.equal(byName(result, name).detail, 'baseline', name);
+    assert.deepEqual(byName(result, name).runs, [], `${name} must not run a test`);
+  }
+  assert.equal(byName(result, 'independent').result, 'KILLED');
+  assert.equal(run.status, 1);
 });
 
 test('mutants-flaky: a timeout, a setup failure and a hook failure in the second run are INVALID', { timeout: 120_000 }, async t => {
