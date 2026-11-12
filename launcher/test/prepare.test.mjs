@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expectRefusal, listing, t, withFixture } from './helpers/fixtures.mjs';
 
+const dryRun = (fx, options) => fx.run(options);
+
 // States V and S on the snapshot: the ticket, the ledger and the plan of a dry run (S2-AC2, S2-AC4, S2-AC5, S2-AC9, S2-AC18).
 t('dod2-paths rule 2: line 1 is exactly TICKET <tag> and line 2 starts with To: REVIEWER', () => withFixture({}, async fx => {
   const original = fx.ticketText;

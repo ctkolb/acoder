@@ -1,5 +1,6 @@
 // main(argv, env, deps): dispatch, exit codes and the last line of A1.6. The binary and the tests call this one function.
-import { parseReviewRun } from './args.mjs';
+import { parseExportManifest, parseReviewRun } from './args.mjs';
+import { writeManifest } from './integrity.mjs';
 import { checkApiKey, loadDefaults, loadOwnerConfig, resolveSettings } from './config.mjs';
 import { checkHomeRule, checkInputPath, resolveHome } from './paths.mjs';
 import { prepare } from './prepare.mjs';
@@ -22,7 +23,13 @@ function dryRunPlan(options, settings, prepared) {
     agent: settings.agent, provider: settings.provider, model: settings.model, effort: settings.effort, endpoint: settings.endpoint, limits: settings.limits,
     image: { ref: options.image, check: 'not_run' }, runtime: { name: options.runtime ?? 'auto', check: 'not_run' },
     key: { env: options.apiKeyEnv, checked: true },
+    ticket: prepared.ticket, mailbox: options.mailbox, allow_image_env: options.allowImageEnv, excluded: prepared.excluded,
+    exports: options.exports.map(({ role }) => ({
+      role, path: prepared.exports[role].dir, inside_mailbox: prepared.exports[role].inside_mailbox, manifest: prepared.manifests[role].path,
+      manifest_sha256: prepared.manifests[role].sha256, source_commit: prepared.manifests[role].source_commit, tree_sha256: prepared.exports[role].tree_sha256, entries: prepared.exports[role].entries,
+    })),
     writable: { scratch: prepared.writable.scratch, report_md: prepared.writable.reportMd, report_json: prepared.writable.reportJson },
+    snapshot: { bytes: prepared.snapshot.bytes, entries: prepared.snapshot.entries, skill_sha256: prepared.skillSha256 },
   };
 }
 
@@ -56,14 +63,25 @@ async function reviewRun(argv, env, deps, io) {
   }
 }
 
+async function exportManifest(argv, io) {
+  try {
+    io.stdout.write(`${writeManifest(parseExportManifest(argv))}\n`);
+    return 0;
+  } catch (error) {
+    if (error instanceof Refusal) {
+      io.stderr.write(`refused: ${error.message}\n`);
+      return 2;
+    }
+    io.stderr.write(`error: ${safe(error?.message ?? error)}\n`);
+    return 1;
+  }
+}
+
 export async function main(argv, env, deps) {
   const io = { stdout: deps.stdout ?? process.stdout, stderr: deps.stderr ?? process.stderr };
   const [command, subcommand, ...rest] = argv;
   if (command === 'review' && subcommand === 'run') return reviewRun(rest, env, deps, io);
-  if (command === 'export' && subcommand === 'manifest') {
-    io.stderr.write('refused: export manifest is not available in this build part\n');
-    return 2;
-  }
+  if (command === 'export' && subcommand === 'manifest') return exportManifest(rest, io);
   io.stderr.write('refused: usage: acoder review run <flags> | acoder review cleanup <flags> | acoder export manifest <flags>\n');
   return 2;
 }
