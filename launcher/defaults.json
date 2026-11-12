@@ -1,0 +1,7 @@
+{
+  "agent": "opencode",
+  "provider": "openai",
+  "model": "gpt-6-luna",
+  "effort": "high",
+  "max_in_flight": 4
+}

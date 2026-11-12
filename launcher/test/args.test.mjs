@@ -47,8 +47,9 @@ t('refuses: a positional argument', () => withFixture({}, fx => expectRefusal(fx
 t('refuses: a flag without its value', () => withFixture({}, fx => expectRefusal(fx, { drop: ['--effort'], add: [['--effort']] }, /--effort/)));
 for (const flag of ['--ticket', '--mailbox', '--image', '--budget-minutes', '--budget-calls', '--budget-tokens', '--model-endpoint', '--staging-dir', '--ticket-sha256', '--max-in-flight', '--scratch-max-bytes']) {
   t(`refuses: repeated single-value flag ${flag}`, () => withFixture({}, fx => {
-    const value = fx.tokens().find(([name]) => name === flag)?.[1] ?? '3';
-    return expectRefusal(fx, { add: [[flag, value]] }, new RegExp(`${flag}.*twice`));
+    const present = fx.tokens().find(([name]) => name === flag);
+    const value = present?.[1] ?? '3';
+    return expectRefusal(fx, { add: present ? [[flag, value]] : [[flag, value], [flag, value]] }, new RegExp(`${flag}.*twice`));
   }));
 }
 for (const [name, value] of [['ticket', 'rel/ticket-x.md'], ['mailbox', 'run'], ['staging-dir', 'tmp'], ['reviewer-skill', 'skill'], ['config', 'cfg.json'], ['extra-ca-cert', 'ca.pem']]) {
