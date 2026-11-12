@@ -336,3 +336,14 @@ t('dod2-home: a .git entry in an ancestor of the mailbox is allowed; one in the 
   fs.mkdirSync(path.join(fx.mailbox, '.GIT'));
   await expectRefusal(fx, {}, /\.git/i);
 }));
+
+t('dod2-paths rule 1: the input kinds are checked (a directory as the ticket, a file as the mailbox, the export or the staging directory)', () => withFixture({}, async fx => {
+  const asDirectory = path.join(fx.stage, 'ticket-dir-r1.md');
+  fs.mkdirSync(asDirectory);
+  await expectRefusal(fx, { set: { '--ticket': asDirectory } }, /--ticket/);
+  await expectRefusal(fx, { set: { '--mailbox': fx.ticket } }, /--mailbox/);
+  await expectRefusal(fx, { set: { '--staging-dir': fx.ticket } }, /--staging-dir/);
+  await expectRefusal(fx, { set: { '--reviewer-skill': fx.ticket } }, /--reviewer-skill/);
+  await expectRefusal(fx, { set: { '--export': `code=${fx.ticket}` } }, /--export/);
+  await expectRefusal(fx, { set: { '--manifest': `code=${fx.stage}` } }, /--manifest/);
+}));

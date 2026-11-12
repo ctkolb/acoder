@@ -136,3 +136,7 @@ t('dod5-minutes: the plan carries wall_seconds = minutes * 60', () => withFixtur
     assert.equal(plan.limits.scratch_max_bytes, 4294967296);
   }
 }));
+
+t('flags: a budget whose wall-clock seconds are not a safe integer is refused', () => withFixture({}, async fx => {
+  await expectRefusal(fx, { set: { '--budget-minutes': '9007199254740991' } }, /--budget-minutes/);
+}));

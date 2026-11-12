@@ -110,3 +110,15 @@ t('key: the message of a refused key never holds the value (unit)', () => {
   assert.match(outcome.thrown ?? '', /ACODER_MODEL_API_KEY/);
   assert.ok(!outcome.thrown.includes(secret) && !outcome.thrown.includes('Z9_-'));
 });
+
+t('dod1-config: the owner file must be a regular file of at most 65536 bytes', () => withFixture({}, async fx => {
+  const big = path.join(fx.base, 'big.json');
+  fs.writeFileSync(big, JSON.stringify({ effort: 'low', pad: 'x'.repeat(70000) }));
+  assert.match(attempt(() => loadOwnerConfig(big)).thrown, /larger/);
+  const target = path.join(fx.base, 'real.json');
+  fs.writeFileSync(target, '{}');
+  fs.symlinkSync(target, path.join(fx.base, 'link.json'));
+  assert.match(attempt(() => loadOwnerConfig(path.join(fx.base, 'link.json'))).thrown, /regular file/);
+  assert.match(attempt(() => loadOwnerConfig(fx.base)).thrown, /regular file/);
+  assert.match(attempt(() => loadOwnerConfig(path.join(fx.base, 'missing.json'))).thrown, /regular file/);
+}));

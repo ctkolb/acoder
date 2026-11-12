@@ -94,3 +94,25 @@ t('dry-run: a refusal removes the staging directory and has no effect', () => wi
   await expectRefusal(fx, { set: { '--ticket-sha256': 'f'.repeat(64) } }, /ticket/);
   assert.equal(fs.readdirSync(fx.staging).length, 0);
 }));
+
+t('dry-run: the plan carries the mailbox, the exports, the snapshot figures, the runtime and the allowed image variables', () => withFixture({ exports: [{ role: 'code' }, { role: 'docs', place: 'inside' }] }, async fx => {
+  const result = await fx.run({ add: [['--runtime', 'podman'], ['--allow-image-env', 'FOO_BAR'], ['--allow-image-env', 'BAZ'], ['--exclude', 'S1']] });
+  assert.equal(result.code, 0, result.stderr);
+  const plan = JSON.parse(result.stdout);
+  assert.equal(plan.mailbox, fx.mailbox);
+  assert.deepEqual(plan.excluded, ['S1']);
+  assert.deepEqual(plan.allow_image_env, ['FOO_BAR', 'BAZ']);
+  assert.deepEqual(plan.runtime, { name: 'podman', check: 'not_run' });
+  assert.ok(plan.snapshot?.bytes > 0 && plan.snapshot?.entries > 0);
+  assert.match(plan.snapshot?.skill_sha256, /^[0-9a-f]{64}$/);
+  assert.equal(plan.ticket?.path, fx.ticket);
+  const [code, docs] = plan.exports;
+  assert.equal(code?.path, fx.export('code').dir);
+  assert.equal(code?.manifest, fx.export('code').manifest);
+  assert.equal(code?.source_commit, 'a'.repeat(40));
+  assert.equal(code?.entries, 7);
+  assert.equal(code?.inside_mailbox, false);
+  assert.equal(docs?.inside_mailbox, true);
+  assert.notEqual(code?.tree_sha256, undefined);
+  assert.equal(code?.tree_sha256, docs?.tree_sha256, 'two exports of equal content have equal tree hashes');
+}));

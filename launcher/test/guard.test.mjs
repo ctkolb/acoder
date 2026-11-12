@@ -75,3 +75,12 @@ t('seams: an unknown subcommand or no argument is a usage error and a seam key i
     assert.match(result.stderr, /^refused: /);
   }
 }));
+
+t('guard: an unexpected internal failure is exit code 1 with the error last line, never a refusal', () => withFixture({}, async fx => {
+  const result = await runMain(fx.argv(), { env: fx.env, deps: { adapters: undefined } });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /^error: /);
+  assert.equal(result.stderr.trimEnd().split('\n').length, 1);
+  assert.equal(lastLine(result.stdout), `ACODER LAUNCH ${fx.tag} error -`);
+  assert.ok(!result.stderr.includes(fx.key) && !result.stdout.includes(fx.key));
+}));

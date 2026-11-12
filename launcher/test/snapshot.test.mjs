@@ -113,7 +113,7 @@ t('spec27-special-files: --exclude of the offending subtree lets the launch proc
   assert.equal(stagingEntries(fx).length, 0);
 }));
 t('spec27-special-files: --exclude must exist, stay relative and not contain the ticket, a manifest or an export', () => withFixture({ exports: [{ role: 'code', place: 'inside' }] }, async fx => {
-  for (const value of ['S1/missing', 'S2', 'S2/export-code', 'S2/export-code/src', '.', 'orchestrator/tickets.json/x']) {
+  for (const value of ['S1/missing', 'S2', 'S2/export-code', 'S2/export-code/src', '.', 'orchestrator', 'orchestrator/tickets.json/x']) {
     await expectRefusal(fx, { add: [['--exclude', value]] }, /--exclude/).catch(error => { error.message = `${value}: ${error.message}`; throw error; });
   }
   await expectRefusal(fx, { add: [['--exclude', 'S2/manifest-code.json']] }, /--exclude/);
