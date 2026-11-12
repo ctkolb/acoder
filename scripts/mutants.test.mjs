@@ -40,6 +40,7 @@ const files = {
 const name = process.env.MUTANT_NAME;
 const log = process.env.HOOKS + '/hooks.log';
 appendFileSync(log, name + ' ' + process.cwd() + '\\n');
+appendFileSync(process.env.HOOKS + '/context.log', (process.env.NODE_TEST_CONTEXT ?? 'unset') + '\\n');
 const count = readFileSync(log, 'utf8').split('\\n').filter(line => line.startsWith(name + ' ')).length;
 if (name === process.env.FAIL_HOOK && count === Number(process.env.FAIL_HOOK_AT)) process.exit(3);
 `,
@@ -158,8 +159,7 @@ const standard = fx => ['--mutants', fx.mutantsFile, '--out', fx.out, '--root', 
 
 // Runs the runner asynchronously: a blocking spawnSync would stop the other self-tests (and their time limits) running.
 function execute(fx, args = standard(fx), { env = {}, cwd = fx.work } = {}) {
-  const inherited = { ...process.env };
-  delete inherited.NODE_TEST_CONTEXT; // A nested `node --test` must not believe it is a child of this one.
+  const inherited = { ...process.env }; // Under `node --test` this includes NODE_TEST_CONTEXT, which the runner must drop.
   return new Promise(resolve => {
     const child = spawn(process.execPath, [runnerPath, ...args], {
       cwd, env: { ...inherited, TMPDIR: fx.tmp, OBS: fx.obs, FLAKE: fx.flake, HOOKS: fx.hooks, PIDS: fx.pids, ...env }, stdio: ['ignore', 'pipe', 'pipe'],
@@ -690,6 +690,25 @@ test('mutants: the caller environment and MUTANT_NAME reach every test run', { t
     'baseline-1', 'baseline-2', 'kill', 'kill', 'neutral-control', 'neutral-control', 'survive', 'survive',
   ]);
   assert.ok(seen.every(entry => entry.probe === 'probe-value'));
+});
+
+test('mutants: NODE_TEST_CONTEXT is removed from the test runs and the hook, and the baseline stays valid', { timeout: 60_000 }, async t => {
+  const fx = await fixture(t, { mutants: [mutant('kill')] });
+  const run = await execute(fx, [...standard(fx), '--after-each-script', 'hook'], { env: { NODE_TEST_CONTEXT: 'child-v8', ACODER_PROBE: 'kept' } });
+  const result = await resultOf(fx, run);
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(result.control, { result: 'SURVIVED' });
+  assert.equal(byName(result, 'kill').result, 'KILLED');
+  // `node --test` sets the marker itself for the files it starts, so the files cannot show what the runner passed on:
+  // with the marker inherited, the nested `node --test` reports nothing usable and the baseline is INVALID.
+  assert.ok(result.baseline.every(baseline => baseline.exit_code === 0 && baseline.fail === 0 && baseline.tests > 0));
+  const seen = await observations(fx);
+  assert.equal(seen.length, 6, 'two baseline runs, two control runs and two runs of the mutant');
+  for (const entry of seen) {
+    assert.equal(entry.probe, 'kept', `${entry.name}: another caller variable was not passed`);
+  }
+  const hooks = (await readFile(path.join(fx.hooks, 'context.log'), 'utf8')).trim().split('\n');
+  assert.deepEqual(hooks, Array(6).fill('unset'), 'the hook saw NODE_TEST_CONTEXT');
 });
 
 test('mutants: --after-each-script runs after every test run, in the root, with MUTANT_NAME', { timeout: 100_000 }, async t => {

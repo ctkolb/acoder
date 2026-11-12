@@ -174,11 +174,20 @@ async function afterEach(context, name, label) {
   const script = context.afterEachScript;
   if (script === null) return null;
   const outcome = await launch('npm', ['run', '--silent', script], {
-    cwd: context.root, env: { ...process.env, MUTANT_NAME: name }, log: path.join(context.session, `${label}.hook.log`), timeoutSeconds: context.timeoutSeconds,
+    cwd: context.root, env: childEnvironment(name), log: path.join(context.session, `${label}.hook.log`), timeoutSeconds: context.timeoutSeconds,
   });
   if (outcome.error) return `could not start npm: ${outcome.error.message}`;
   if (outcome.timedOut) return `npm run ${script} exceeded ${context.timeoutSeconds} seconds`;
   return outcome.code === 0 ? null : `npm run ${script} exited with ${outcome.code ?? outcome.signal}`;
+}
+
+// The environment of every process the runner starts: the caller's, plus MUTANT_NAME. NODE_TEST_CONTEXT is Node's own
+// marker for a process started by `node --test`; passed on, it makes a nested `node --test` misreport its tests (owner
+// decision D-R22), so it is the one caller variable that is removed.
+function childEnvironment(name) {
+  const environment = { ...process.env, MUTANT_NAME: name };
+  delete environment.NODE_TEST_CONTEXT;
+  return environment;
 }
 
 // One `node --test` run of `modules` in `directory` (module paths never start with `-`, see validateMutants); counts come from the reporter events, never from the console.
@@ -186,7 +195,7 @@ async function testRun(context, { directory, modules, name, label }) {
   const events = path.join(context.session, `${label}.events`);
   const outcome = await launch(process.execPath, [
     '--test', `--test-reporter=${import.meta.filename}`, `--test-reporter-destination=${events}`, ...modules,
-  ], { cwd: directory, env: { ...process.env, MUTANT_NAME: name }, log: path.join(context.session, `${label}.log`), timeoutSeconds: context.timeoutSeconds });
+  ], { cwd: directory, env: childEnvironment(name), log: path.join(context.session, `${label}.log`), timeoutSeconds: context.timeoutSeconds });
   const hook = await afterEach(context, name, label);
   const lines = (await readFile(events, 'utf8').catch(() => '')).split('\n').filter(Boolean);
   let parsed;
