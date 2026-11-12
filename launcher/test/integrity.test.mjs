@@ -3,7 +3,11 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseManifest, readSmallFile, sha256File, treeHash, verifyExport, writeManifest } from '../lib/integrity.mjs';
-import { BIN, attempt, buildManifestText, expectRefusal, forceRemove, listing, makeFixture, sha, t, withFixture, withWritable } from './helpers/fixtures.mjs';
+import nodeTest from 'node:test';
+import { BIN, attempt, buildManifestText, expectRefusal, forceRemove, listing, makeFixture, sha, withFixture, withWritable, thrownOf } from './helpers/fixtures.mjs';
+
+// G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
 
 const hex = char => char.repeat(64);
 
@@ -191,9 +195,9 @@ t('manifest format: the example of A7.2 is accepted and every deviation is refus
     'a mode with three digits': m => { m.entries[3].mode = '444'; }, 'a number mode': m => { m.entries[3].mode = 444; },
   };
   for (const [name, change] of Object.entries(refused)) assert.ok(parsed(change).thrown, `${name}: should be refused`);
-  assert.ok(attempt(() => parseManifest('not json')).thrown);
-  assert.ok(attempt(() => parseManifest('[]')).thrown);
-  assert.ok(attempt(() => parseManifest('null')).thrown);
+  assert.ok(thrownOf(() => parseManifest('not json')));
+  assert.ok(thrownOf(() => parseManifest('[]')));
+  assert.ok(thrownOf(() => parseManifest('null')));
 });
 t('manifest verify: verifyExport lists each mismatch kind for a directory (unit)', () => withFixture({}, async fx => {
   const manifest = attempt(() => parseManifest(buildManifestText(live(fx))));
@@ -312,11 +316,11 @@ t('integrity units: sha256File and readSmallFile do not follow a link and refuse
   fs.writeFileSync(file, 'abc');
   assert.equal(attempt(() => sha256File(file)), sha('abc'));
   fs.symlinkSync(file, path.join(fx.base, 'link.txt'));
-  assert.ok(attempt(() => sha256File(path.join(fx.base, 'link.txt'))).thrown, 'a link is not followed');
-  assert.ok(attempt(() => readSmallFile(path.join(fx.base, 'link.txt'), 'the file', 100)).thrown);
+  assert.ok(thrownOf(() => sha256File(path.join(fx.base, 'link.txt'))), 'a link is not followed');
+  assert.ok(thrownOf(() => readSmallFile(path.join(fx.base, 'link.txt'), 'the file', 100)));
   assert.equal(attempt(() => readSmallFile(file, 'the file', 3)), 'abc');
-  assert.match(attempt(() => readSmallFile(file, 'the file', 2)).thrown, /larger/);
-  assert.match(attempt(() => readSmallFile(fx.base, 'the file', 100)).thrown, /regular file/);
+  assert.match(thrownOf(() => readSmallFile(file, 'the file', 2)), /larger/);
+  assert.match(thrownOf(() => readSmallFile(fx.base, 'the file', 100)), /regular file/);
 }));
 t('integrity units: verifyExport reports a link that leaves the export and a different target', () => withFixture({}, async fx => {
   const dir = path.join(fx.base, 'unit-export');
@@ -333,7 +337,7 @@ t('integrity units: verifyExport reports a link that leaves the export and a dif
 t('integrity units: writeManifest refuses more entries than its bound and accepts the bound', () => withFixture({}, async fx => {
   const dir = live(fx);
   const out = path.join(fx.base, 'bounded.json');
-  assert.match(attempt(() => writeManifest({ exportDir: dir, sourceCommit: 'a'.repeat(40), out, maxEntries: 5 })).thrown, /more than 5 entries/);
+  assert.match(thrownOf(() => writeManifest({ exportDir: dir, sourceCommit: 'a'.repeat(40), out, maxEntries: 5 })), /more than 5 entries/);
   assert.equal(fs.existsSync(out), false);
   assert.match(attempt(() => writeManifest({ exportDir: dir, sourceCommit: 'a'.repeat(40), out, maxEntries: 7 })), /^[0-9a-f]{64}$/);
   assert.equal(attempt(() => parseManifest(fs.readFileSync(out, 'utf8'))).entries?.length, 7);

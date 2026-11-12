@@ -30,7 +30,7 @@ const pattern = (regex, what) => (value, label) => {
 // "https://<DNS host name>[:443]/<path>": no IP literal, no user info, no query, no fragment (A1.5).
 export function checkEndpoint(value, label) {
   const fail = why => new Refusal(`${label} ${why}`);
-  if (typeof value !== 'string' || !/^https:\/\/[^/]/.test(value) || /[\u0000- \u007f\\?#]/u.test(value)) throw fail('must be a plain https URL without query or fragment');
+  if (typeof value !== 'string' || !/^https:\/\/[^/]/.test(value) || /[\u0000-\u0020\u007f\\?#]/u.test(value)) throw fail('must be a plain https URL without query or fragment');
   let url;
   try { url = new URL(value); } catch { throw fail('is not a valid URL'); }
   if (url.protocol !== 'https:') throw fail('must use the https scheme');

@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { listing, t, withFixture } from './helpers/fixtures.mjs';
+import nodeTest from 'node:test';
+import { listing, withFixture } from './helpers/fixtures.mjs';
+
+// G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
 
 // S2-AC18 (skeleton): --dry-run performs states V and S, prints the plan as JSON, exits 0, removes the staging directory,
 // creates nothing in the mailbox and prints no key value. The image and runtime checks are not_run until stage S4.

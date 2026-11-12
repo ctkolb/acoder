@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { expectRefusal, listing, t, withFixture } from './helpers/fixtures.mjs';
+import nodeTest from 'node:test';
+import { expectRefusal, listing, withFixture } from './helpers/fixtures.mjs';
+
+// G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
 
 const dryRun = (fx, options) => fx.run(options);
 

@@ -6,12 +6,11 @@ import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import nodeTest from 'node:test';
 import { adapters, providers } from '../../lib/registries.mjs';
 
-// G11: every test has a finite time limit of its own.
-export const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
 export const attempt = fn => { try { return fn(); } catch (error) { return { thrown: String(error.message) }; } };
+// The message a call throws, or null when it does not throw (a refusal test then fails on its assertion, not on a TypeError).
+export const thrownOf = fn => { try { fn(); return null; } catch (error) { return String(error.message); } };
 export const sha = data => createHash('sha256').update(data).digest('hex');
 export const BIN = new URL('../../bin/acoder.mjs', import.meta.url).pathname;
 export const LAUNCHER = new URL('../..', import.meta.url).pathname;

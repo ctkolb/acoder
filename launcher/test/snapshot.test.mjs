@@ -7,7 +7,11 @@ import { parseReviewRun } from '../lib/args.mjs';
 import { treeHash } from '../lib/integrity.mjs';
 import { prepare } from '../lib/prepare.mjs';
 import { ENTRY_LIMIT, copyTree } from '../lib/snapshot.mjs';
-import { attempt, expectRefusal, listing, t, withFixture, withWritable } from './helpers/fixtures.mjs';
+import nodeTest from 'node:test';
+import { attempt, expectRefusal, listing, withFixture, withWritable, thrownOf } from './helpers/fixtures.mjs';
+
+// G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
 
 const options = (fx, extra) => parseReviewRun(fx.argv(extra).slice(2));
 const prepared = (fx, extra, deps) => attempt(() => prepare(options(fx, extra), fx.env, deps));
@@ -237,7 +241,7 @@ t('snapshot limits: --snapshot-max-bytes and the 200000 entry limit refuse and r
   for (let index = 0; index < 6; index += 1) fs.writeFileSync(path.join(source, `f${index}`), 'x');
   const target = path.join(fx.base, 'many-copy');
   const context = { kind: 'payload', limits: { bytes: 1000, entries: 5 }, counters: { bytes: 0, entries: 0 }, label: 'many' };
-  assert.match(attempt(() => copyTree(source, target, context)).thrown, /entr/);
+  assert.match(thrownOf(() => copyTree(source, target, context)), /entr/);
   const roomy = { kind: 'payload', limits: { bytes: 1000, entries: 6 }, counters: { bytes: 0, entries: 0 }, label: 'many' };
   fs.rmSync(target, { recursive: true, force: true });
   assert.equal(attempt(() => copyTree(source, target, roomy)), undefined);
@@ -256,7 +260,7 @@ t('snapshot race: a file replaced by a link after the lstat is not copied throug
     kind: 'payload', label: 'race', limits: { bytes: 1000, entries: 10 }, counters: { bytes: 0, entries: 0 },
     afterLstat: live => { fs.rmSync(live); fs.symlinkSync(secret, live); },
   };
-  assert.match(attempt(() => copyTree(source, target, context)).thrown ?? '', /changed while it was copied|ELOOP|too many|symbolic/i);
+  assert.match(thrownOf(() => copyTree(source, target, context)), /changed while it was copied|ELOOP|too many|symbolic/i);
   const copied = path.join(target, 'victim.txt');
   assert.equal(fs.existsSync(copied) ? fs.readFileSync(copied, 'utf8').includes('outside secret') : false, false, 'the secret is not in the copy');
 }));
@@ -268,7 +272,7 @@ t('snapshot race: the same file replaced by a different regular file after the l
     kind: 'payload', label: 'race', limits: { bytes: 1000, entries: 10 }, counters: { bytes: 0, entries: 0 },
     afterLstat: live => { fs.rmSync(live); fs.writeFileSync(live, 'a different file\n'); },
   };
-  assert.match(attempt(() => copyTree(source, path.join(fx.base, 'race-copy2'), context)).thrown ?? '', /changed while it was copied/);
+  assert.match(thrownOf(() => copyTree(source, path.join(fx.base, 'race-copy2'), context)), /changed while it was copied/);
 }));
 t('snapshot: a symbolic link, a FIFO and a credential name in a payload tree are refused', () => withFixture({}, async fx => {
   const kinds = { 'a symbolic link': dir => fs.symlinkSync('x', path.join(dir, 'l')), 'a .git entry': dir => fs.mkdirSync(path.join(dir, '.GIT')), 'a credential name': dir => fs.writeFileSync(path.join(dir, '.PgPass'), 'x') };
@@ -276,6 +280,6 @@ t('snapshot: a symbolic link, a FIFO and a credential name in a payload tree are
     const source = fs.mkdtempSync(path.join(fx.base, 'payload-'));
     make(source);
     const context = { kind: 'payload', label: 'payload', limits: { bytes: 1000, entries: 10 }, counters: { bytes: 0, entries: 0 } };
-    assert.match(attempt(() => copyTree(source, `${source}-copy`, context)).thrown ?? '', /not allowed/, name);
+    assert.match(thrownOf(() => copyTree(source, `${source}-copy`, context)), /not allowed/, name);
   }
 }));

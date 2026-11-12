@@ -3,7 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadDefaults, loadOwnerConfig, resolveSettings, checkApiKey } from '../lib/config.mjs';
 import { parseReviewRun } from '../lib/args.mjs';
-import { attempt, expectRefusal, LAUNCHER, t, withFixture } from './helpers/fixtures.mjs';
+import nodeTest from 'node:test';
+import { attempt, expectRefusal, LAUNCHER, withFixture, thrownOf } from './helpers/fixtures.mjs';
+
+// G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
 
 const registry = { adapters: { opencode: { providers: ['openai', 'other'] }, narrow: { providers: ['other'] } }, providers: { openai: {}, other: {} } };
 const DEFAULTS = { agent: 'opencode', provider: 'openai', model: 'gpt-6-luna', effort: 'high', max_in_flight: 4 };
@@ -44,7 +48,7 @@ t('dod1-config: refusals of the resolution (unknown agent or provider, adapter w
   assert.match(resolve([], {}, true).thrown, /endpoint/);
   assert.match(resolve([], { provider: 'nope' }).thrown, /provider/);
   assert.match(resolve([], { agent: 'nope' }).thrown, /agent/);
-  assert.match(attempt(() => resolveSettings({ options: optionsFor(fx), owner: { bogus: 1 }, defaults: DEFAULTS, ...registry })).thrown, /bogus/);
+  assert.match(thrownOf(() => resolveSettings({ options: optionsFor(fx), owner: { bogus: 1 }, defaults: DEFAULTS, ...registry })), /bogus/);
 }));
 
 t('dod1-config: the owner file loader refuses an unknown key, a wrong type, bad JSON and a non-object', () => withFixture({}, async fx => {
@@ -97,7 +101,7 @@ t('key: unset, empty, short and bad-byte keys are refused and no message holds t
     assert.match(result.stderr, /^refused: .*ACODER_MODEL_API_KEY/);
     assert.equal(result.stderr.trimEnd().split('\n').length, 1);
     if (value) assert.ok(!result.stderr.includes(value) && !result.stdout.includes(value), `${name}: the message holds the value`);
-    assert.match(attempt(() => checkApiKey(env, 'ACODER_MODEL_API_KEY')).thrown, /ACODER_MODEL_API_KEY/);
+    assert.match(thrownOf(() => checkApiKey(env, 'ACODER_MODEL_API_KEY')), /ACODER_MODEL_API_KEY/);
   }
   assert.equal(attempt(() => checkApiKey({ ACODER_MODEL_API_KEY: 'a'.repeat(16) }, 'ACODER_MODEL_API_KEY')), undefined);
   assert.notEqual(attempt(() => checkApiKey({ ACODER_MODEL_API_KEY: 'a'.repeat(15) }, 'ACODER_MODEL_API_KEY')), undefined);
@@ -106,19 +110,19 @@ t('key: unset, empty, short and bad-byte keys are refused and no message holds t
 
 t('key: the message of a refused key never holds the value (unit)', () => {
   const secret = 'Z9_-Z9_-Z9_-Z9_-!!';
-  const outcome = attempt(() => checkApiKey({ ACODER_MODEL_API_KEY: secret }, 'ACODER_MODEL_API_KEY'));
-  assert.match(outcome.thrown ?? '', /ACODER_MODEL_API_KEY/);
-  assert.ok(!outcome.thrown.includes(secret) && !outcome.thrown.includes('Z9_-'));
+  const message = thrownOf(() => checkApiKey({ ACODER_MODEL_API_KEY: secret }, 'ACODER_MODEL_API_KEY'));
+  assert.match(message, /ACODER_MODEL_API_KEY/);
+  assert.ok(!message.includes(secret) && !message.includes('Z9_-'));
 });
 
 t('dod1-config: the owner file must be a regular file of at most 65536 bytes', () => withFixture({}, async fx => {
   const big = path.join(fx.base, 'big.json');
   fs.writeFileSync(big, JSON.stringify({ effort: 'low', pad: 'x'.repeat(70000) }));
-  assert.match(attempt(() => loadOwnerConfig(big)).thrown, /larger/);
+  assert.match(thrownOf(() => loadOwnerConfig(big)), /larger/);
   const target = path.join(fx.base, 'real.json');
   fs.writeFileSync(target, '{}');
   fs.symlinkSync(target, path.join(fx.base, 'link.json'));
-  assert.match(attempt(() => loadOwnerConfig(path.join(fx.base, 'link.json'))).thrown, /regular file/);
-  assert.match(attempt(() => loadOwnerConfig(fx.base)).thrown, /regular file/);
-  assert.match(attempt(() => loadOwnerConfig(path.join(fx.base, 'missing.json'))).thrown, /regular file/);
+  assert.match(thrownOf(() => loadOwnerConfig(path.join(fx.base, 'link.json'))), /regular file/);
+  assert.match(thrownOf(() => loadOwnerConfig(fx.base)), /regular file/);
+  assert.match(thrownOf(() => loadOwnerConfig(path.join(fx.base, 'missing.json'))), /regular file/);
 }));

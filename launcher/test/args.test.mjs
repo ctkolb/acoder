@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { parseReviewRun, DEFAULT_SCRATCH_MAX_BYTES } from '../lib/args.mjs';
-import { attempt, expectRefusal, t, withFixture } from './helpers/fixtures.mjs';
+import nodeTest from 'node:test';
+import { attempt, expectRefusal, withFixture } from './helpers/fixtures.mjs';
+
+// G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
 
 // S2-AC1: `acoder review run` accepts exactly the flags of A1.5; each refusal is exit code 2, one line, the refused last line, no effect.
 t('flags: a complete valid command line parses to the expected options', () => withFixture({}, async fx => {
