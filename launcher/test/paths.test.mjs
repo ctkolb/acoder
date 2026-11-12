@@ -256,7 +256,9 @@ t('dod2-home: a credential name in the export path, the staging path and the ski
   }
   const exportDir = path.join(fx.base, 'exp', '.docker', 'code');
   fs.mkdirSync(path.dirname(exportDir), { recursive: true });
+  fs.chmodSync(fx.export('code').dir, 0o755);
   fs.renameSync(fx.export('code').dir, exportDir);
+  fs.chmodSync(exportDir, 0o555);
   await expectRefusal(fx, { set: { '--export': `code=${exportDir}` } }, /credential/);
 }));
 t('dod2-home: $HOME that resolves differently from the account home is a refusal; the same value is accepted', () => withFixture({}, async fx => {
