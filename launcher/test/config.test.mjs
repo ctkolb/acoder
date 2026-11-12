@@ -4,7 +4,7 @@ import path from 'node:path';
 import { loadDefaults, loadOwnerConfig, resolveSettings, checkApiKey } from '../lib/config.mjs';
 import { parseReviewRun } from '../lib/args.mjs';
 import nodeTest from 'node:test';
-import { attempt, expectRefusal, LAUNCHER, withFixture, thrownOf } from './helpers/fixtures.mjs';
+import { attempt, expectRefusal, LAUNCHER, withFixture, thrownOf, parseJson } from './helpers/fixtures.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
 const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
@@ -70,7 +70,7 @@ t('dod1-config: through the command, --config supplies the endpoint and the mode
   fs.writeFileSync(file, JSON.stringify({ endpoint: 'https://file.example.org/v1', model: 'file-model', effort: 'medium' }));
   const result = await fx.run({ drop: ['--model-endpoint'], add: [['--config', file]] });
   assert.equal(result.code, 0, result.stderr);
-  const plan = JSON.parse(result.stdout);
+  const plan = parseJson(result.stdout);
   assert.equal(plan.endpoint, 'https://file.example.org/v1');
   assert.equal(plan.model, 'file-model');
   assert.equal(plan.effort, 'medium');
@@ -89,7 +89,7 @@ t('key: an acceptable key passes from the default and from a named variable', ()
   const result = await fx.run({ env: { MY_KEY: fx.key }, add: [['--api-key-env', 'MY_KEY']] });
   assert.equal(result.code, 0, result.stderr);
   assert.ok(!result.stdout.includes(fx.key) && !result.stderr.includes(fx.key));
-  assert.equal(JSON.parse(result.stdout).key.env, 'MY_KEY');
+  assert.equal(parseJson(result.stdout).key.env, 'MY_KEY');
 }));
 
 t('key: unset, empty, short and bad-byte keys are refused and no message holds the value', () => withFixture({}, async fx => {
@@ -125,4 +125,9 @@ t('dod1-config: the owner file must be a regular file of at most 65536 bytes', (
   assert.match(thrownOf(() => loadOwnerConfig(path.join(fx.base, 'link.json'))), /regular file/);
   assert.match(thrownOf(() => loadOwnerConfig(fx.base)), /regular file/);
   assert.match(thrownOf(() => loadOwnerConfig(path.join(fx.base, 'missing.json'))), /regular file/);
+}));
+
+t('dod1-config: a provider that the adapter lists but the registry lacks is refused', () => withFixture({}, async fx => {
+  const message = thrownOf(() => resolveSettings({ options: optionsFor(fx, [['--provider', 'ghost']]), owner: {}, defaults: DEFAULTS, adapters: { opencode: { providers: ['openai', 'ghost'] } }, providers: { openai: {} } }));
+  assert.match(message, /unknown provider ghost/);
 }));

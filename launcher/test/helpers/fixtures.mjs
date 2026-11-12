@@ -11,6 +11,10 @@ import { adapters, providers } from '../../lib/registries.mjs';
 export const attempt = fn => { try { return fn(); } catch (error) { return { thrown: String(error.message) }; } };
 // The message a call throws, or null when it does not throw (a refusal test then fails on its assertion, not on a TypeError).
 export const thrownOf = fn => { try { fn(); return null; } catch (error) { return String(error.message); } };
+// One JSON document, or a failed assertion (not a SyntaxError) when the output is something else.
+export const parseJson = text => { try { return JSON.parse(text); } catch { assert.fail(`not one JSON document: ${String(text).slice(0, 120)}`); } };
+// Removes a prepared run's staging directory; a failure is an assertion failure.
+export const release = result => { try { result?.cleanup?.(); } catch (error) { assert.fail(`cleanup failed: ${error.message}`); } };
 export const sha = data => createHash('sha256').update(data).digest('hex');
 export const BIN = new URL('../../bin/acoder.mjs', import.meta.url).pathname;
 export const LAUNCHER = new URL('../..', import.meta.url).pathname;

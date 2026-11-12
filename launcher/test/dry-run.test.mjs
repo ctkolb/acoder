@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import nodeTest from 'node:test';
-import { listing, withFixture } from './helpers/fixtures.mjs';
+import { listing, withFixture, parseJson } from './helpers/fixtures.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
 const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
@@ -14,7 +14,7 @@ t('dry-run: prints one JSON plan, exits 0 and leaves nothing behind', () => with
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.stderr, '');
   assert.equal(result.stdout.trimEnd().split('\n').filter(line => line.startsWith('ACODER LAUNCH')).length, 0);
-  const plan = JSON.parse(result.stdout);
+  const plan = parseJson(result.stdout);
   assert.equal(plan.dry_run, true);
   assert.equal(plan.tag, fx.tag);
   assert.equal(plan.image.check, 'not_run');

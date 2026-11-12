@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import nodeTest from 'node:test';
-import { expectRefusal, listing, withFixture } from './helpers/fixtures.mjs';
+import { expectRefusal, listing, withFixture, parseJson } from './helpers/fixtures.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
 const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
@@ -33,6 +33,10 @@ t('dod2-paths rule 3: the ledger holds exactly one entry with this tag, role REV
   }
   fs.writeFileSync(fx.ledger, 'not json');
   await expectRefusal(fx, {}, /ledger|tickets\.json/);
+  for (const text of ['{}', '{"tickets": 3}', '"text"', 'null', '3']) {
+    fs.writeFileSync(fx.ledger, text);
+    await expectRefusal(fx, {}, /ledger|tickets\.json/).catch(error => { error.message = `${text}: ${error.message}`; throw error; });
+  }
   fs.writeFileSync(fx.ledger, JSON.stringify([entry]));
   assert.equal((await dryRun(fx, {})).code, 0, 'a ledger that is a plain list of entries is read too');
 }));
@@ -50,7 +54,7 @@ t('dod2-home: a .git entry inside the copied tree is refused (rule 5), unless th
   await expectRefusal(fx, {}, /\.git/i);
   const result = await fx.run({ add: [['--exclude', 'S1/scratch-other']] });
   assert.equal(result.code, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout).excluded, ['S1/scratch-other']);
+  assert.deepEqual(parseJson(result.stdout).excluded, ['S1/scratch-other']);
 }));
 
 t('dry-run: prints one JSON plan, exits 0 and leaves nothing behind', () => withFixture({}, async fx => {
@@ -59,7 +63,7 @@ t('dry-run: prints one JSON plan, exits 0 and leaves nothing behind', () => with
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.stderr, '');
   assert.equal(result.stdout.trimEnd().split('\n').filter(line => line.startsWith('ACODER LAUNCH')).length, 0);
-  const plan = JSON.parse(result.stdout);
+  const plan = parseJson(result.stdout);
   assert.equal(plan.dry_run, true);
   assert.equal(plan.tag, fx.tag);
   assert.equal(plan.ticket?.sha256, fx.ticketSha);
@@ -85,11 +89,11 @@ t('dry-run: prints one JSON plan, exits 0 and leaves nothing behind', () => with
 t('dry-run: with --no-export and with an export inside the mailbox', () => withFixture({ noExport: true }, async fx => {
   const result = await fx.run();
   assert.equal(result.code, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout).exports, []);
+  assert.deepEqual(parseJson(result.stdout).exports, []);
   await withFixture({ exports: [{ role: 'code', place: 'inside' }] }, async inside => {
     const again = await inside.run();
     assert.equal(again.code, 0, again.stderr);
-    assert.equal(JSON.parse(again.stdout).exports?.[0]?.inside_mailbox, true);
+    assert.equal(parseJson(again.stdout).exports?.[0]?.inside_mailbox, true);
     assert.equal(fs.readdirSync(inside.staging).length, 0);
   });
 }));
@@ -102,7 +106,7 @@ t('dry-run: a refusal removes the staging directory and has no effect', () => wi
 t('dry-run: the plan carries the mailbox, the exports, the snapshot figures, the runtime and the allowed image variables', () => withFixture({ exports: [{ role: 'code' }, { role: 'docs', place: 'inside' }] }, async fx => {
   const result = await fx.run({ add: [['--runtime', 'podman'], ['--allow-image-env', 'FOO_BAR'], ['--allow-image-env', 'BAZ'], ['--exclude', 'S1']] });
   assert.equal(result.code, 0, result.stderr);
-  const plan = JSON.parse(result.stdout);
+  const plan = parseJson(result.stdout);
   assert.equal(plan.mailbox, fx.mailbox);
   assert.deepEqual(plan.excluded, ['S1']);
   assert.deepEqual(plan.allow_image_env, ['FOO_BAR', 'BAZ']);

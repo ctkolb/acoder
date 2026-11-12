@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { parseReviewRun, DEFAULT_SCRATCH_MAX_BYTES } from '../lib/args.mjs';
 import nodeTest from 'node:test';
-import { attempt, expectRefusal, withFixture } from './helpers/fixtures.mjs';
+import { attempt, expectRefusal, withFixture, parseJson } from './helpers/fixtures.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
 const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
@@ -71,8 +71,11 @@ t('refuses: a manifest for a role that has no export', () => withFixture({}, fx 
 t('refuses: a manifest flag with --no-export', () => withFixture({ noExport: true }, fx => expectRefusal(fx, { add: [['--manifest', `docs=${fx.ticket}`]] }, /--manifest/)));
 t('refuses: a duplicate role', () => withFixture({}, fx => expectRefusal(fx, { add: [['--export', `code=${fx.export('code').dir}`]] }, /duplicate.*code/)));
 for (const role of ['Code', 'a_b', '', 'a b']) {
-  t(`refuses: export role ${JSON.stringify(role)}`, () => withFixture({}, fx => expectRefusal(fx, { set: { '--export': `${role}=${fx.export('code').dir}` } }, /role/)));
+  t(`refuses: export role ${JSON.stringify(role)}`, () => withFixture({}, fx => expectRefusal(fx, { set: {
+    '--export': `${role}=${fx.export('code').dir}`, '--manifest': `${role}=${fx.export('code').manifest}`, '--manifest-sha256': `${role}=${fx.export('code').manifestSha}`,
+  } }, /does not match \[a-z0-9-\]\+/)));
 }
+t('refuses: two manifests for one role', () => withFixture({}, fx => expectRefusal(fx, { add: [['--manifest', `code=${fx.export('code').manifest}`]] }, /duplicate --manifest for role code/)));
 t('refuses: an export flag without a role', () => withFixture({}, fx => expectRefusal(fx, { set: { '--export': fx.export('code').dir } }, /--export/)));
 for (const value of ['abc', '0', '-1', '1.5', '', '1e3', ' 7', '007', '9007199254740993']) {
   for (const flag of ['--budget-minutes', '--budget-calls', '--budget-tokens']) {
@@ -106,7 +109,7 @@ t('accepts: --model with the matching provider prefix or none', () => withFixtur
   for (const model of ['openai/gpt-x', 'gpt-x']) {
     const result = await fx.run({ add: [['--model', model]] });
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(JSON.parse(result.stdout).model, 'gpt-x');
+    assert.equal(parseJson(result.stdout).model, 'gpt-x');
   }
 }));
 for (const [flag, value] of [['--ticket-sha256', 'A'.repeat(64)], ['--ticket-sha256', 'a'.repeat(63)], ['--effort', 'High'], ['--effort', 'a1'], ['--runtime', 'lxc'], ['--scratch-size', '0'], ['--scratch-size', 'big'],
@@ -132,7 +135,7 @@ t('dod5-minutes: the plan carries wall_seconds = minutes * 60', () => withFixtur
   for (const minutes of [1, 7, 90]) {
     const result = await fx.run({ set: { '--budget-minutes': String(minutes) } });
     assert.equal(result.code, 0, result.stderr);
-    const plan = JSON.parse(result.stdout);
+    const plan = parseJson(result.stdout);
     assert.equal(plan.limits.wall_seconds, minutes * 60);
     assert.equal(plan.limits.calls, 10);
     assert.equal(plan.limits.tokens, 1000);

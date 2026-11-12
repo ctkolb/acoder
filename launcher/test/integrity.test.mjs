@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseManifest, readSmallFile, sha256File, treeHash, verifyExport, writeManifest } from '../lib/integrity.mjs';
 import nodeTest from 'node:test';
-import { BIN, attempt, buildManifestText, expectRefusal, forceRemove, listing, makeFixture, sha, withFixture, withWritable, thrownOf } from './helpers/fixtures.mjs';
+import { BIN, attempt, buildManifestText, expectRefusal, forceRemove, listing, makeFixture, sha, withFixture, withWritable, thrownOf, release } from './helpers/fixtures.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
 const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
@@ -85,7 +85,7 @@ t('dod7-recorded: the returned values are the ticket hash, the manifest hashes a
     assert.equal(result.exports.code.entries, 7, 'the entries of the manifest');
     assert.match(result.skillSha256, /^[0-9a-f]{64}$/);
     assert.ok(result.snapshot.bytes > 0 && result.snapshot.entries > 0);
-  } finally { result.cleanup?.(); }
+  } finally { release(result); }
 }));
 t('dod7-recorded: the tree hash covers type, mode and link target (directory against empty file, mode only, target only)', () => withFixture({}, async fx => {
   const make = name => { const dir = path.join(fx.base, name); fs.mkdirSync(dir); return dir; };
@@ -188,13 +188,14 @@ t('manifest format: the example of A7.2 is accepted and every deviation is refus
     'provenance other than asserted': m => { m.source_commit_provenance = 'verified'; }, 'a short commit': m => { m.source_commit = 'a'.repeat(39); }, 'an upper-case commit': m => { m.source_commit = 'A'.repeat(40); },
     'a 41-character commit': m => { m.source_commit = 'a'.repeat(41); }, 'an unknown entry field': m => { m.entries[0].extra = 1; }, 'an entry missing sha256': m => { delete m.entries[1].sha256; },
     'a dir with a sha256': m => { m.entries[0].sha256 = hex('1'); }, 'a link without a target': m => { delete m.entries[2].target; }, 'a link with a sha256': m => { m.entries[2].sha256 = hex('1'); },
-    'an unknown type': m => { m.entries[0].type = 'fifo'; }, 'a duplicate path': m => { m.entries[3].path = 'link'; }, 'an unsorted list': m => { m.entries.reverse(); },
-    'an absolute path': m => { m.entries[0].path = '/bin'; }, 'a dot-dot segment': m => { m.entries[3].path = '../src.py'; }, 'a dot segment': m => { m.entries[3].path = './src.py'; },
+    'an unknown type': m => { m.entries[0].type = 'fifo'; }, 'a link with an empty target': m => { m.entries[2].target = ''; }, 'a link with a file source_mode': m => { m.entries[2].source_mode = '100644'; }, 'a duplicate path': m => { m.entries[3].path = 'link'; }, 'an unsorted list': m => { m.entries.reverse(); },
+    'a dot-dot segment': m => { m.entries[3].path = 'src.py/..'; }, 'a dot segment': m => { m.entries[3].path = 'src.py/.'; },
     'an empty segment': m => { m.entries[3].path = 'a//b'; }, 'a trailing slash': m => { m.entries[0].path = 'bin/'; }, 'a backslash path': m => { m.entries[3].path = 'a\\b'; },
     'a bad sha256': m => { m.entries[3].sha256 = 'XYZ'; }, 'an upper-case sha256': m => { m.entries[3].sha256 = hex('A'); }, 'entries not a list': m => { m.entries = {}; },
     'a mode with three digits': m => { m.entries[3].mode = '444'; }, 'a number mode': m => { m.entries[3].mode = 444; },
   };
-  for (const [name, change] of Object.entries(refused)) assert.ok(parsed(change).thrown, `${name}: should be refused`);
+  for (const [name, change] of Object.entries(refused)) assert.match(parsed(change).thrown ?? '', /manifest/, `${name}: should be refused by the manifest check`);
+  assert.match(parsed(m => { m.entries[0].path = '/bin'; }).thrown ?? '', /manifest/, 'an absolute path');
   assert.ok(thrownOf(() => parseManifest('not json')));
   assert.ok(thrownOf(() => parseManifest('[]')));
   assert.ok(thrownOf(() => parseManifest('null')));
@@ -282,18 +283,24 @@ t('spec22-source-commit: an output path that exists, lies inside the export or i
     fs.chmodSync(live(fx), 0o555);
   }
 }));
-t('spec22-source-commit: the export walk refuses special files, .git, credential names and escaping links like the copier', () => withFixture({}, async fx => {
+t('spec22-source-commit: the export walk refuses special files, .git, credential names and escaping links like the copier, in read-only form', () => withFixture({}, async fx => {
   const env = noGitEnv(fx);
   const commit = 'f'.repeat(40);
   const out = path.join(fx.base, 'special.json');
-  for (const change of [
-    () => fs.mkdirSync(path.join(live(fx), '.git')), () => fs.writeFileSync(path.join(live(fx), '.npmrc'), 'x'), () => fs.symlinkSync('/etc', path.join(live(fx), 'abs')), () => fs.symlinkSync('../../run', path.join(live(fx), 'out')),
-    () => spawnSync('mkfifo', [path.join(live(fx), 'pipe')]),
-  ]) {
+  const cases = {
+    'a .git directory': [dir => fs.mkdirSync(path.join(dir, '.git'), { mode: 0o555 }), /\.git/],
+    'a credential file': [dir => { fs.writeFileSync(path.join(dir, '.npmrc'), 'x'); fs.chmodSync(path.join(dir, '.npmrc'), 0o444); }, /credential/],
+    'an absolute link': [dir => fs.symlinkSync('/nonexistent-target', path.join(dir, 'abs')), /symbolic link .* leaves the export/],
+    'a link above the root': [dir => fs.symlinkSync('../../run', path.join(dir, 'out')), /symbolic link .* leaves the export/],
+    'a FIFO': [dir => { spawnSync('mkfifo', [path.join(dir, 'pipe')]); fs.chmodSync(path.join(dir, 'pipe'), 0o444); }, /FIFO/],
+  };
+  for (const [name, [change, pattern]] of Object.entries(cases)) {
     fs.chmodSync(live(fx), 0o755);
-    change();
+    change(live(fx));
+    fs.chmodSync(live(fx), 0o555);
     const run = runExport(fx, ['--export', live(fx), '--source-commit', commit, '--out', out], env);
-    assert.equal(run.status, 2, run.stderr);
+    assert.equal(run.status, 2, `${name}: ${run.stderr}`);
+    assert.match(run.stderr, pattern, name);
     assert.equal(fs.existsSync(out), false);
     forceRemove(live(fx));
     fs.mkdirSync(live(fx));
@@ -341,4 +348,39 @@ t('integrity units: writeManifest refuses more entries than its bound and accept
   assert.equal(fs.existsSync(out), false);
   assert.match(attempt(() => writeManifest({ exportDir: dir, sourceCommit: 'a'.repeat(40), out, maxEntries: 7 })), /^[0-9a-f]{64}$/);
   assert.equal(attempt(() => parseManifest(fs.readFileSync(out, 'utf8'))).entries?.length, 7);
+}));
+
+t('integrity units: the tree hash covers content, the root mode and the difference between a directory and a FIFO', () => withFixture({}, async fx => {
+  const make = name => { const dir = path.join(fx.base, name); fs.mkdirSync(dir); return dir; };
+  const hashOf = dir => attempt(() => treeHash(dir));
+  const a = make('h-a');
+  const b = make('h-b');
+  fs.writeFileSync(path.join(a, 'f'), 'one\n');
+  fs.writeFileSync(path.join(b, 'f'), 'two\n');
+  assert.notEqual(hashOf(a), hashOf(b), 'content only');
+  const c = make('h-c');
+  const d = make('h-d');
+  fs.chmodSync(c, 0o555);
+  fs.chmodSync(d, 0o755);
+  assert.notEqual(hashOf(c), hashOf(d), 'root mode only');
+  const e = make('h-e');
+  const f = make('h-f');
+  fs.mkdirSync(path.join(e, 'x'), { mode: 0o755 });
+  fs.chmodSync(path.join(e, 'x'), 0o755);
+  assert.equal(spawnSync('mkfifo', [path.join(f, 'x')]).status, 0);
+  fs.chmodSync(path.join(f, 'x'), 0o755);
+  assert.notEqual(hashOf(e), hashOf(f), 'a directory against a FIFO with the same mode');
+  for (const dir of [c, d]) fs.chmodSync(dir, 0o755);
+}));
+t('spec22-source-commit: an export given as a link, as a file or relative is refused, with the commit and the output valid', () => withFixture({}, async fx => {
+  const env = noGitEnv(fx);
+  const link = path.join(fx.base, 'export-link');
+  fs.symlinkSync(live(fx), link);
+  for (const exportPath of [link, fx.ticket, `${live(fx)}/`, `${path.dirname(live(fx))}/./code`, path.join(fx.base, 'missing')]) {
+    const out = path.join(fx.base, 'never.json');
+    const run = runExport(fx, ['--export', exportPath, '--source-commit', 'a'.repeat(40), '--out', out], env);
+    assert.equal(run.status, 2, `${exportPath}: ${run.stderr}`);
+    assert.match(run.stderr, /^refused: /);
+    assert.equal(fs.existsSync(out), false);
+  }
 }));

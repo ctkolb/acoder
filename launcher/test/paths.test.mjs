@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { checkOverlap, homeRuleViolation, isReservedTarget, writablePaths } from '../lib/paths.mjs';
+import os from 'node:os';
+import { checkOverlap, homeRuleViolation, isReservedTarget, resolveHome, writablePaths } from '../lib/paths.mjs';
 import nodeTest from 'node:test';
 import { attempt, expectRefusal, listing, makeFixture, withFixture } from './helpers/fixtures.mjs';
 
@@ -50,10 +51,10 @@ t('dod2-paths rule 2: the ticket lies two levels below the mailbox and is named 
   fs.mkdirSync(deep);
   const moved = path.join(deep, path.basename(fx.ticket));
   fs.copyFileSync(fx.ticket, moved);
-  await expectRefusal(fx, { set: { '--ticket': moved } }, /ticket/);
+  await expectRefusal(fx, { set: { '--ticket': moved } }, /two levels/);
   const shallow = path.join(fx.mailbox, path.basename(fx.ticket));
   fs.copyFileSync(fx.ticket, shallow);
-  await expectRefusal(fx, { set: { '--ticket': shallow } }, /ticket/);
+  await expectRefusal(fx, { set: { '--ticket': shallow } }, /two levels/);
   const misnamed = path.join(fx.stage, 'notes.md');
   fs.copyFileSync(fx.ticket, misnamed);
   await expectRefusal(fx, { set: { '--ticket': misnamed } }, /ticket-<tag>\.md|named/);
@@ -138,10 +139,18 @@ t('spec10-overlap: the accepted layout passes and each overlap kind is a refusal
     'staging contains an export': { staging: path.dirname(fx.export('code').dir) },
     'staging lies inside an export': { staging: `${fx.export('code').dir}/src` },
   };
+  const patterns = {
+    'export equals the mailbox': /equals or contains the mailbox/, 'export contains the mailbox': /equals or contains the mailbox/,
+    'export equals the scratch path': /scratch path/, 'export lies inside the scratch path': /scratch path/, 'export contains the scratch path': /scratch path/,
+    'export equals a report path': /report path/, 'export lies inside a report path': /report path/, 'export contains a report path': /scratch path|report path/,
+    'export equals another export': /export docs|export code/, 'export contains another export': /export docs|export code/, 'export lies inside another export': /export docs|export code/,
+    'manifest inside an export': /lies inside an export/, 'manifest inside the scratch path': /inside the scratch path/, 'manifest outside the mailbox': /outside the mailbox/,
+    'staging equals the mailbox': /staging directory .* the mailbox/, 'staging contains the mailbox': /staging directory/, 'staging lies inside the mailbox': /staging directory .* the mailbox/,
+    'staging equals an export': /staging directory .* export/, 'staging contains an export': /staging directory .* export/, 'staging lies inside an export': /staging directory .* export/,
+  };
   for (const [name, change] of Object.entries(cases)) {
     const outcome = overlap({ ...base, ...change });
-    assert.ok(outcome?.thrown, `${name}: expected a refusal`);
-    assert.doesNotMatch(outcome.thrown, /not implemented/, name);
+    assert.match(outcome?.thrown ?? '', patterns[name], `${name}: expected this refusal`);
   }
   assert.equal(overlap({ ...base, exports: [{ role: 'code', dir: fx.export('code').dir }, { role: 'docs', dir: `${fx.base}/exp-docs` }] }), undefined, 'a sibling export of a similar name is not an overlap');
   assert.equal(overlap({ ...base, exports: [{ role: 'code', dir: `${fx.base}/exp/code` }, { role: 'docs', dir: `${fx.base}/exp/code2` }] }), undefined, 'a name that only shares a prefix is not an overlap');
@@ -350,4 +359,14 @@ t('dod2-paths rule 1: the input kinds are checked (a directory as the ticket, a 
   await expectRefusal(fx, { set: { '--reviewer-skill': fx.ticket } }, /--reviewer-skill/);
   await expectRefusal(fx, { set: { '--export': `code=${fx.ticket}` } }, /--export/);
   await expectRefusal(fx, { set: { '--manifest': `code=${fx.stage}` } }, /--manifest/);
+}));
+
+t('dod2-home: the account home is the real path of the password database home directory', () => {
+  assert.equal(attempt(() => resolveHome({}, {})), fs.realpathSync(os.userInfo().homedir));
+  assert.equal(attempt(() => resolveHome({}, { home: '/syn/given-home' })), '/syn/given-home');
+});
+t('dod4-own-mailbox: an orchestrator entry that is a file is not a mailbox ledger', () => withFixture({}, async fx => {
+  fs.rmSync(path.join(fx.mailbox, 'orchestrator'), { recursive: true });
+  fs.writeFileSync(path.join(fx.mailbox, 'orchestrator'), 'not a directory');
+  await expectRefusal(fx, {}, /is not a run mailbox/);
 }));

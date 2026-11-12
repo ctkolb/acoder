@@ -8,7 +8,7 @@ import { treeHash } from '../lib/integrity.mjs';
 import { prepare } from '../lib/prepare.mjs';
 import { ENTRY_LIMIT, copyTree } from '../lib/snapshot.mjs';
 import nodeTest from 'node:test';
-import { attempt, expectRefusal, listing, withFixture, withWritable, thrownOf } from './helpers/fixtures.mjs';
+import { buildManifestText, sha, attempt, expectRefusal, listing, withFixture, withWritable, thrownOf, release } from './helpers/fixtures.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
 const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
@@ -49,7 +49,7 @@ t('spec01-hardlink-copy: a file hard-linked to a sentinel and one hard-linked to
     withWritable(path.dirname(copy), () => { fs.chmodSync(copy, 0o644); fs.writeFileSync(copy, 'changed in the copy\n'); });
     assert.equal(fs.readFileSync(sentinel, 'utf8'), 'sentinel bytes\n', 'writing to a copy leaves the sentinel unchanged');
     assert.equal(fs.lstatSync(sentinel).nlink, 2);
-  } finally { result.cleanup?.(); }
+  } finally { release(result); }
   assert.equal(stagingEntries(fx).length, 0);
 }));
 
@@ -113,11 +113,11 @@ t('spec27-special-files: --exclude of the offending subtree lets the launch proc
     assert.deepEqual(result.excluded, ['S1/scratch-other']);
     assert.equal(fs.existsSync(path.join(result.staging.mailbox, 'S1', 'scratch-other')), false);
     assert.ok(fs.existsSync(path.join(result.staging.mailbox, 'S1', 'note.md')));
-  } finally { result.cleanup?.(); }
+  } finally { release(result); }
   assert.equal(stagingEntries(fx).length, 0);
 }));
 t('spec27-special-files: --exclude must exist, stay relative and not contain the ticket, a manifest or an export', () => withFixture({ exports: [{ role: 'code', place: 'inside' }] }, async fx => {
-  for (const value of ['S1/missing', 'S2', 'S2/export-code', 'S2/export-code/src', '.', 'orchestrator', 'orchestrator/tickets.json/x']) {
+  for (const value of ['S1/missing', 'S1/../S1', '../run/S1', '/S1', 'S2', 'S2/export-code', 'S2/export-code/src', '.', 'orchestrator', 'orchestrator/tickets.json/x']) {
     await expectRefusal(fx, { add: [['--exclude', value]] }, /--exclude/).catch(error => { error.message = `${value}: ${error.message}`; throw error; });
   }
   await expectRefusal(fx, { add: [['--exclude', 'S2/manifest-code.json']] }, /--exclude/);
@@ -147,7 +147,7 @@ t('spec10-snapshot: edits of the live ticket, export file and export directory a
     assert.equal(fs.readFileSync(path.join(result.staging.mailbox, 'S2', path.basename(fx.ticket)), 'utf8'), fx.ticketText);
     assert.equal(result.exports.code.tree_sha256, original, 'the recorded export hash is that of the copy');
     assert.equal(fs.existsSync(path.join(result.exports.code.copy, 'other.txt')), false);
-  } finally { result.cleanup?.(); }
+  } finally { release(result); }
 }));
 t('spec10-snapshot: editing the COPY of the ticket or of an export file is refused with exit code 2', () => withFixture({}, async fx => {
   const editTicketCopy = info => {
@@ -174,7 +174,7 @@ t('spec10-snapshot: an export inside the mailbox is verified and used from the m
     assert.equal(result.exports.code.copy, path.join(result.staging.mailbox, 'S2', 'export-code'));
     assert.equal(fs.readFileSync(path.join(result.exports.code.copy, 'src', 'a.py'), 'utf8'), 'print(1)\n');
     assert.equal(result.exports.code.inside_mailbox, true);
-  } finally { result.cleanup?.(); }
+  } finally { release(result); }
 }));
 
 t('snapshot: the staging directory has a marker, mode 0700, the modes of A2.5.4, and the mount points of A2.3.4', () => withFixture({}, async fx => {
@@ -184,7 +184,7 @@ t('snapshot: the staging directory has a marker, mode 0700, the modes of A2.5.4,
     const dir = result.staging.dir;
     assert.equal(path.dirname(dir), fx.staging);
     assert.equal(fs.lstatSync(dir).mode & 0o777, 0o700);
-    assert.equal(fs.readFileSync(path.join(dir, '.acoder-staging'), 'utf8').trim(), result.staging.runId);
+    assert.equal(fs.readFileSync(path.join(dir, '.acoder-staging'), 'utf8').trim(), result.staging.runId, 'the marker holds the run id');
     const copy = result.staging.mailbox;
     assert.equal(fs.lstatSync(copy).mode & 0o777, 0o555);
     assert.equal(fs.lstatSync(path.join(copy, 'S1', 'note.md')).mode & 0o777, 0o444);
@@ -192,10 +192,11 @@ t('snapshot: the staging directory has a marker, mode 0700, the modes of A2.5.4,
     assert.equal(fs.lstatSync(path.join(copy, 'S2')).mode & 0o777, 0o555);
     assert.equal(fs.lstatSync(path.join(copy, 'orchestrator', 'tickets.json')).mode & 0o777, 0o444);
     const scratch = path.join(copy, 'S2', `scratch-${fx.tag}`);
-    assert.ok(fs.lstatSync(scratch).isDirectory() && fs.readdirSync(scratch).length === 0, 'an empty scratch directory in the copy');
+    const scratchInfo = fs.lstatSync(scratch, { throwIfNoEntry: false });
+    assert.ok(scratchInfo?.isDirectory() && fs.readdirSync(scratch).length === 0, 'an empty scratch directory in the copy');
     for (const name of [`report-${fx.tag}.md`, `report-${fx.tag}.json`]) {
-      const stat = fs.lstatSync(path.join(copy, 'S2', name));
-      assert.ok(stat.isFile() && stat.size === 0, `${name}: an empty file in the copy`);
+      const stat = fs.lstatSync(path.join(copy, 'S2', name), { throwIfNoEntry: false });
+      assert.ok(stat?.isFile() && stat.size === 0, `${name}: an empty file in the copy`);
     }
     const exported = result.exports.code.copy;
     assert.equal(exported, path.join(result.staging.dir, 'export-code'));
@@ -204,7 +205,7 @@ t('snapshot: the staging directory has a marker, mode 0700, the modes of A2.5.4,
     assert.equal(fs.readlinkSync(path.join(exported, 'link')), 'src/a.py');
     assert.equal(fs.existsSync(fx.writable.scratch), false, 'nothing in the live mailbox');
     assert.ok(fs.existsSync(path.join(result.staging.skill, 'SKILL.md')), 'the reviewer skill is copied');
-  } finally { result.cleanup?.(); }
+  } finally { release(result); }
   assert.equal(stagingEntries(fx).length, 0, 'cleanup removes the staging directory, also read-only directories');
 }));
 t('snapshot: the export modes of the SOURCE are kept (a 0644 file stays 0644) and never taken from the manifest', () => withFixture({}, async fx => {
@@ -219,10 +220,10 @@ t('snapshot: cleanup deletes only a directory whose marker matches', () => withF
   const decoy = path.join(fx.base, 'decoy');
   fs.mkdirSync(decoy);
   fs.writeFileSync(path.join(decoy, 'keep.txt'), 'x');
-  assert.notEqual(attempt(() => removeStaging(decoy, 'some-run-id')), undefined);
+  assert.match(thrownOf(() => removeStaging(decoy, 'some-run-id')), /not this run's staging directory/);
   assert.ok(fs.existsSync(path.join(decoy, 'keep.txt')), 'no marker: not deleted');
   fs.writeFileSync(path.join(decoy, '.acoder-staging'), 'other-run\n');
-  assert.notEqual(attempt(() => removeStaging(decoy, 'some-run-id')), undefined);
+  assert.match(thrownOf(() => removeStaging(decoy, 'some-run-id')), /not this run's staging directory/);
   assert.ok(fs.existsSync(path.join(decoy, 'keep.txt')), 'another run id: not deleted');
   fs.writeFileSync(path.join(decoy, '.acoder-staging'), 'some-run-id\n');
   assert.equal(attempt(() => removeStaging(decoy, 'some-run-id')), undefined);
@@ -282,4 +283,36 @@ t('snapshot: a symbolic link, a FIFO and a credential name in a payload tree are
     const context = { kind: 'payload', label: 'payload', limits: { bytes: 1000, entries: 10 }, counters: { bytes: 0, entries: 0 } };
     assert.match(thrownOf(() => copyTree(source, `${source}-copy`, context)), /not allowed/, name);
   }
+}));
+
+// Links that the manifest lists are still checked by the copier itself, before the verification on the copy.
+const relist = (fx, mutate) => {
+  const dir = fx.export('code').dir;
+  withWritable(dir, () => mutate(dir));
+  const text = buildManifestText(dir);
+  fs.writeFileSync(fx.export('code').manifest, text);
+  return sha(text);
+};
+t('spec27-special-files: the copier refuses a listed absolute link and a listed chained link that leaves the export', () => withFixture({}, async fx => {
+  for (const [name, mutate] of Object.entries({
+    'an absolute link': dir => fs.symlinkSync(fx.mailbox, path.join(dir, 'abs')),
+    'a chained link that escapes': dir => { fs.symlinkSync('..', path.join(dir, 'up')); fs.symlinkSync('up/../run', path.join(dir, 'chain')); },
+    'a link above the root': dir => fs.symlinkSync('../../run', path.join(dir, 'out')),
+  })) {
+    const digest = relist(fx, mutate);
+    await expectRefusal(fx, { set: { '--manifest-sha256': `code=${digest}` } }, /symbolic link .* not allowed/).catch(error => { error.message = `${name}: ${error.message}`; throw error; });
+    withWritable(fx.export('code').dir, () => { for (const entry of ['abs', 'up', 'chain', 'out']) fs.rmSync(path.join(fx.export('code').dir, entry), { force: true }); });
+  }
+}));
+t('spec27-special-files: a chain of more than 40 links is refused, a chain of 5 is accepted', () => withFixture({}, async fx => {
+  const chain = length => dir => {
+    for (let index = 1; index < length; index += 1) fs.symlinkSync(`hop${index + 1}`, path.join(dir, `hop${index}`));
+    fs.symlinkSync('src/a.py', path.join(dir, `hop${length}`));
+  };
+  const accepted = relist(fx, chain(5));
+  const result = await fx.run({ set: { '--manifest-sha256': `code=${accepted}` } });
+  assert.equal(result.code, 0, result.stderr);
+  withWritable(fx.export('code').dir, () => { for (let index = 1; index <= 5; index += 1) fs.rmSync(path.join(fx.export('code').dir, `hop${index}`)); });
+  const refused = relist(fx, chain(45));
+  await expectRefusal(fx, { set: { '--manifest-sha256': `code=${refused}` } }, /symbolic link .* not allowed/);
 }));
