@@ -207,7 +207,7 @@ test('mutants: command line errors are exit code 2 with one line and no other ef
   assert.equal(await readFile(path.join(fx.work, 'existing.json'), 'utf8'), 'precious bytes');
 });
 
-test('mutants: the root and the time limit take their documented defaults', () => {
+test('mutants: the root and the time limit take their documented defaults', { timeout: 10_000 }, () => {
   const parsed = attempt(() => parseArguments(['--mutants', 'm.json', '--out', 'o.json']));
   assert.equal(parsed.root, process.cwd());
   assert.equal(parsed.timeoutSeconds, 120);
@@ -429,7 +429,7 @@ test('mutants: fewer tests, more tests and skipped tests than the baseline are I
   assert.equal(run.status, 1);
 });
 
-test('mutants: cancelled tests are counted and are not assertion failures', () => {
+test('mutants: cancelled tests are counted and are not assertion failures', { timeout: 10_000 }, () => {
   const event = (name, extra) => ({ type: 'fail', name, nesting: 0, file: '/r/a.test.mjs', fileLevel: false, suite: false, skip: false, todo: false, ...extra });
   const summary = attempt(() => summarizeEvents([
     event('passes', { type: 'pass' }),
