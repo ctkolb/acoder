@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { parseReviewRun } from '../lib/args.mjs';
+import { treeHash } from '../lib/integrity.mjs';
 import { prepare } from '../lib/prepare.mjs';
 import { ENTRY_LIMIT, copyTree } from '../lib/snapshot.mjs';
 import { attempt, expectRefusal, listing, t, withFixture, withWritable } from './helpers/fixtures.mjs';
@@ -122,6 +123,7 @@ t('spec27-special-files: --exclude must exist, stay relative and not contain the
 // spec10-snapshot: the copy is what is verified and used, never the live tree.
 t('spec10-snapshot: edits of the live ticket, export file and export directory after the copy change nothing that is verified or recorded', () => withFixture({}, async fx => {
   let seen;
+  const original = attempt(() => treeHash(fx.export('code').dir));
   const afterSnapshot = info => {
     seen = info;
     fs.appendFileSync(fx.ticket, 'edited after the copy\n');
@@ -139,7 +141,7 @@ t('spec10-snapshot: edits of the live ticket, export file and export directory a
     assert.equal(result.manifests.code.sha256, fx.export('code').manifestSha);
     assert.equal(fs.readFileSync(path.join(result.exports.code.copy, 'src', 'a.py'), 'utf8'), 'print(1)\n', 'the plan uses the copy');
     assert.equal(fs.readFileSync(path.join(result.staging.mailbox, 'S2', path.basename(fx.ticket)), 'utf8'), fx.ticketText);
-    assert.match(result.exports.code.tree_sha256, /^[0-9a-f]{64}$/);
+    assert.equal(result.exports.code.tree_sha256, original, 'the recorded export hash is that of the copy');
     assert.equal(fs.existsSync(path.join(result.exports.code.copy, 'other.txt')), false);
   } finally { result.cleanup?.(); }
 }));
@@ -241,4 +243,39 @@ t('snapshot limits: --snapshot-max-bytes and the 200000 entry limit refuse and r
   assert.equal(attempt(() => copyTree(source, target, roomy)), undefined);
   assert.equal(roomy.counters.entries, 6);
   assert.equal(roomy.counters.bytes, 6);
+}));
+
+t('snapshot race: a file replaced by a link after the lstat is not copied through the link', () => withFixture({}, async fx => {
+  const source = path.join(fx.base, 'race-src');
+  fs.mkdirSync(source);
+  fs.writeFileSync(path.join(source, 'victim.txt'), 'original\n');
+  const secret = path.join(fx.base, 'secret.txt');
+  fs.writeFileSync(secret, 'outside secret\n');
+  const target = path.join(fx.base, 'race-copy');
+  const context = {
+    kind: 'payload', label: 'race', limits: { bytes: 1000, entries: 10 }, counters: { bytes: 0, entries: 0 },
+    afterLstat: live => { fs.rmSync(live); fs.symlinkSync(secret, live); },
+  };
+  assert.match(attempt(() => copyTree(source, target, context)).thrown ?? '', /changed while it was copied|ELOOP|too many|symbolic/i);
+  const copied = path.join(target, 'victim.txt');
+  assert.equal(fs.existsSync(copied) ? fs.readFileSync(copied, 'utf8').includes('outside secret') : false, false, 'the secret is not in the copy');
+}));
+t('snapshot race: the same file replaced by a different regular file after the lstat is refused (the identity check)', () => withFixture({}, async fx => {
+  const source = path.join(fx.base, 'race-src2');
+  fs.mkdirSync(source);
+  fs.writeFileSync(path.join(source, 'victim.txt'), 'original\n');
+  const context = {
+    kind: 'payload', label: 'race', limits: { bytes: 1000, entries: 10 }, counters: { bytes: 0, entries: 0 },
+    afterLstat: live => { fs.rmSync(live); fs.writeFileSync(live, 'a different file\n'); },
+  };
+  assert.match(attempt(() => copyTree(source, path.join(fx.base, 'race-copy2'), context)).thrown ?? '', /changed while it was copied/);
+}));
+t('snapshot: a symbolic link, a FIFO and a credential name in a payload tree are refused', () => withFixture({}, async fx => {
+  const kinds = { 'a symbolic link': dir => fs.symlinkSync('x', path.join(dir, 'l')), 'a .git entry': dir => fs.mkdirSync(path.join(dir, '.GIT')), 'a credential name': dir => fs.writeFileSync(path.join(dir, '.PgPass'), 'x') };
+  for (const [name, make] of Object.entries(kinds)) {
+    const source = fs.mkdtempSync(path.join(fx.base, 'payload-'));
+    make(source);
+    const context = { kind: 'payload', label: 'payload', limits: { bytes: 1000, entries: 10 }, counters: { bytes: 0, entries: 0 } };
+    assert.match(attempt(() => copyTree(source, `${source}-copy`, context)).thrown ?? '', /not allowed/, name);
+  }
 }));

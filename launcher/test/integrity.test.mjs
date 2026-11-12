@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseManifest, treeHash, verifyExport } from '../lib/integrity.mjs';
+import { parseManifest, readSmallFile, sha256File, treeHash, verifyExport, writeManifest } from '../lib/integrity.mjs';
 import { BIN, attempt, buildManifestText, expectRefusal, forceRemove, listing, makeFixture, sha, t, withFixture, withWritable } from './helpers/fixtures.mjs';
 
 const hex = char => char.repeat(64);
@@ -76,6 +76,9 @@ t('dod7-recorded: the returned values are the ticket hash, the manifest hashes a
       assert.equal(result.exports[role].tree_sha256, attempt(() => treeHash(fx.export(role).dir)), 'the copy has the content, modes and links of the source');
     }
     assert.notEqual(result.exports.code.tree_sha256, 'a'.repeat(64));
+    assert.equal(result.exports.code.inside_mailbox, false);
+    assert.equal(result.exports.docs.inside_mailbox, true);
+    assert.equal(result.exports.code.entries, 7, 'the entries of the manifest');
     assert.match(result.skillSha256, /^[0-9a-f]{64}$/);
     assert.ok(result.snapshot.bytes > 0 && result.snapshot.entries > 0);
   } finally { result.cleanup?.(); }
@@ -157,7 +160,7 @@ t('spec11-modes: a manifest pair 100644/0555, 100755/0444, 040000/0755, 120000 w
   };
   for (const [name, change] of Object.entries(bad)) {
     const digest = exportWith(fx, 'code', m => { change(m); return m; });
-    await expectRefusal(fx, { set: { '--manifest-sha256': `code=${digest}` } }, /manifest|mode/).catch(error => { error.message = `${name}: ${error.message}`; throw error; });
+    await expectRefusal(fx, { set: { '--manifest-sha256': `code=${digest}` } }, /export code: .*manifest/).catch(error => { error.message = `${name}: ${error.message}`; throw error; });
   }
 }));
 
@@ -301,4 +304,37 @@ t('spec22-source-commit: export manifest refuses unknown or repeated flags and a
     assert.equal(run.status, 2, `${args.join(' ')}: ${run.stdout}${run.stderr}`);
   }
   assert.equal(fs.existsSync(path.join(fx.base, 'x.json')), false);
+}));
+
+// Units of the helpers: no link is followed, sizes are bounded, and an escaping link listed in a manifest is a mismatch.
+t('integrity units: sha256File and readSmallFile do not follow a link and refuse non-files and large files', () => withFixture({}, async fx => {
+  const file = path.join(fx.base, 'plain.txt');
+  fs.writeFileSync(file, 'abc');
+  assert.equal(attempt(() => sha256File(file)), sha('abc'));
+  fs.symlinkSync(file, path.join(fx.base, 'link.txt'));
+  assert.ok(attempt(() => sha256File(path.join(fx.base, 'link.txt'))).thrown, 'a link is not followed');
+  assert.ok(attempt(() => readSmallFile(path.join(fx.base, 'link.txt'), 'the file', 100)).thrown);
+  assert.equal(attempt(() => readSmallFile(file, 'the file', 3)), 'abc');
+  assert.match(attempt(() => readSmallFile(file, 'the file', 2)).thrown, /larger/);
+  assert.match(attempt(() => readSmallFile(fx.base, 'the file', 100)).thrown, /regular file/);
+}));
+t('integrity units: verifyExport reports a link that leaves the export and a different target', () => withFixture({}, async fx => {
+  const dir = path.join(fx.base, 'unit-export');
+  fs.mkdirSync(dir);
+  fs.symlinkSync('../outside', path.join(dir, 'esc'));
+  fs.symlinkSync('b', path.join(dir, 'ok'));
+  fs.chmodSync(dir, 0o555);
+  const manifest = { ...validManifest(), entries: [
+    { path: 'esc', type: 'symlink', target: '../outside', source_mode: '120000' }, { path: 'ok', type: 'symlink', target: 'a', source_mode: '120000' },
+  ] };
+  assert.deepEqual(attempt(() => verifyExport(dir, manifest)), [{ kind: 'link_escape', path: 'esc' }, { kind: 'link_target', path: 'ok' }]);
+  fs.chmodSync(dir, 0o755);
+}));
+t('integrity units: writeManifest refuses more entries than its bound and accepts the bound', () => withFixture({}, async fx => {
+  const dir = live(fx);
+  const out = path.join(fx.base, 'bounded.json');
+  assert.match(attempt(() => writeManifest({ exportDir: dir, sourceCommit: 'a'.repeat(40), out, maxEntries: 5 })).thrown, /more than 5 entries/);
+  assert.equal(fs.existsSync(out), false);
+  assert.match(attempt(() => writeManifest({ exportDir: dir, sourceCommit: 'a'.repeat(40), out, maxEntries: 7 })), /^[0-9a-f]{64}$/);
+  assert.equal(attempt(() => parseManifest(fs.readFileSync(out, 'utf8'))).entries?.length, 7);
 }));

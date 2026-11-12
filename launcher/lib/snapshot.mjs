@@ -127,6 +127,7 @@ function walk(sourceDir, targetDir, relative, context, exportRoot) {
       walk(live, copy, shown, context, inner);
       context.modes.push([copy, inner === null ? 0o555 : info.mode & 0o777]);
     } else if (info.isFile()) {
+      context.afterLstat?.(live);
       copyFile(live, copy, info, shown, context, exportRoot === null ? 0o444 : info.mode & 0o777);
     } else {
       if (exportRoot === null) throw refuse(context, 'a symbolic link', shown);
@@ -142,7 +143,8 @@ export function applyModes(modes) {
 }
 
 // context: { kind: 'mailbox' | 'export' | 'payload', label, limits: { bytes, entries }, counters: { bytes, entries },
-//            excludes?: Set of live paths, exportRoots?: Set of live export roots inside the mailbox, modes?, deferModes? }
+//            excludes?: Set of live paths, exportRoots?: Set of live export roots inside the mailbox, modes?, deferModes?,
+//            afterLstat?: a test hook that runs between the lstat and the open of a regular file }
 export function copyTree(source, target, context) {
   const info = fs.lstatSync(source);
   if (!info.isDirectory()) throw new Refusal(`${context.label} is not a directory`);

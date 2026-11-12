@@ -150,7 +150,7 @@ export function treeHash(root) {
 const notReadOnly = what => new Refusal(`the export is not in read-only form: ${what}`);
 
 // A7.6: `acoder export manifest`. The caller asserts the commit; no Git command is run.
-export function writeManifest({ exportDir, sourceCommit, out }) {
+export function writeManifest({ exportDir, sourceCommit, out, maxEntries = ENTRY_LIMIT }) {
   if (!COMMIT.test(sourceCommit)) throw new Refusal('--source-commit must be 40 or 64 lower-case hex characters');
   const rootInfo = fs.lstatSync(exportDir, { throwIfNoEntry: false });
   if (!rootInfo?.isDirectory() || fs.realpathSync(exportDir) !== exportDir) throw new Refusal('--export must be a directory that equals its real path');
@@ -164,7 +164,7 @@ export function writeManifest({ exportDir, sourceCommit, out }) {
     for (const name of fs.readdirSync(directory)) {
       const live = path.join(directory, name);
       const shown = relative === '' ? name : `${relative}/${name}`;
-      if (entries.length >= ENTRY_LIMIT) throw new Refusal(`the export has more than ${ENTRY_LIMIT} entries`);
+      if (entries.length >= maxEntries) throw new Refusal(`the export has more than ${maxEntries} entries`);
       const info = fs.lstatSync(live);
       const problem = entryProblem(shown, info);
       if (problem !== null) throw new Refusal(`${problem} at ${safe(shown)} in the export is not allowed`);
