@@ -68,23 +68,34 @@ The orchestrator writes only inside the mailbox. The builder commits only on a n
 
 ## Model Recommendations
 
-The most important part of this system is that the vendor for the Builder model needs to be different from the vendor of the Reviewer model. Choosing which model to use should be considered based on the complexity of the code, sensitivity of the project, and your budget. Just keep in mind that more expensive does not necessarily mean stronger for all roles. Especially for Orchestrator and Reviewer, some of the cheaper models from the popular vendors get better benchmarks.
+Ranked by pipeline strength first, cost second.
 
-These skills have been tested with the following model combinations:
+### Cost model
 
-| Role | Model | Notes |
-|---|---|---|
-| Orchestrator | Sonnet 5.5 or GPT-6 Luna | |
-| Builder | Sonnet 5.5 | |
-| Reviewer | GPT-6 Luna | |
-| | | |
-| Orchestrator | Sonnet 5.5 or GPT-6 Luna | |
-| Builder | GPT-6.1 Sol | |
-| Reviewer | DeepSeek V4.1 Flash | For sensitive stages: GLM-5.3 or Sonnet 5.5 |
-| | | |
-| Orchestrator | Sonnet 5.5 or GPT-6 Luna | |
-| Builder | DeepSeek V4.1 Flash | For sensitive stages: Sonnet 5.5 |
-| Reviewer | GPT-6 Luna | |
+- **Cycle** = Orchestrator (dispatch) → Builder → Reviewer → Orchestrator (interpret/route) — approximately 3 orchestrator calls, 1 builder pass, 1 reviewer pass, each ~30K input / 4K output at list rates.
+- **Per-feature cost** = (cycles-to-green × per-cycle cost) + one-time 1a spend (if applicable) + escalation surcharges.
+- Figures are order-of-magnitude arithmetic, not quotes. Real runs vary with diff size (a 200K-context review costs ~3× the nominal figure).
+
+| #     | Orchestrator                   | Builder              | Reviewer                                                                | Best for                                                                                                    | ~$/cycle                     | Notes / Warnings                                                                                                                                      |
+| ----- | ------------------------------ | -------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1** | — (you)                        | Fable 5.2            | GPT-6 Astra                                                             | Security-sensitive features — but only for the planning stage. *Not worthwhile beyond planning.*            | One-time: ~$5–10 per feature | Tell Fable the builder will be Sonnet — but ask for *explicitness, not simplification*                                                                |
+| **2** | Sonnet 5.5                     | Opus 5.5             | GPT-6.1 Sol                                                             | Execution of a security-sensitive spec OR Escalation after 2-3 review rejections from with a Sonnet builder | ~$0.60                       | Opus and Sonnet tie often in benchmarks; could be relatively expensive for the improvement; Optional Astra final exploit pass if stakes warrant |
+| **3** | Sonnet 5.5                     | Sonnet 5.5           | GLM-5.3 *or* GPT-6.1 Sol                                                | Sensitive-but-not-frontline runs                                                                            | ~$0.46                       |                                                                                                                                                       |
+| **4** | **Sonnet 5.5**                 | **Sonnet 5.5**       | **GPT-6 Luna**; escalating to **GLM-5.3** for security sensitive stages | **Daily driver emphasizing Claude**                                                                         | **~$0.41**                   | GLM is a better reviewer when in a stage particularly risky for security                                                                              |
+| **5** | **GPT-6 Luna**                 | **GPT-6.1 Sol @med** | **GLM-5.3**                                                             | **Daily Driver emphasizing Codex**                                                                          | **~$0.30**                   | ~1-notch step-down in planning and general coding vs. Sonnet — expect slightly more cycles per ticket                                                 |
+| **6** | GPT-6 Luna                     | GLM-5.3              | GPT-6 Luna                                                              | Pay-per-token weeks, unknown work                                                                           | ~$0.08                       | Cheap, with the "strength" at the builder seat                                                                                                        |
+| **7** | Sonnet 5.5 or GPT-6 Luna 	 | DeepSeek V4.1 Flash  | GLM-5.3                                                                 | Bulk work, doc work, low stakes                                                                             | ~$0.07                       |                                                                                                                                                       |
+
+### Effort settings
+
+- Orchestrator: `medium` default; `high` only when making escalation decisions or interpreting repeated rejections.
+- Builder: Sonnet/Opus: `high` , Sol `med`
+- Reviewer: `high` always (deliberation pays in review); Sol peaks at `high` — xhigh/max score *lower* while costing more.
+
+### Escalation triggers
+
+- 2–3 reviewer rejections on one ticket → escalate the builder (Sonnet → Opus) and the reviewer (Luna → Sol) *together*. A ticket hard enough for Opus is too hard for a $0.50/M reviewer — the most expensive code must never get the cheapest review.
+- Security-flagged diff (auth, secrets, network) → reviewer escalates regardless of cycle count.
 
 ## DIRECTED run options (Template B)
 
