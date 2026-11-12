@@ -194,8 +194,8 @@ t('manifest format: the example of A7.2 is accepted and every deviation is refus
     'a bad sha256': m => { m.entries[3].sha256 = 'XYZ'; }, 'an upper-case sha256': m => { m.entries[3].sha256 = hex('A'); }, 'entries not a list': m => { m.entries = {}; },
     'a mode with three digits': m => { m.entries[3].mode = '444'; }, 'a number mode': m => { m.entries[3].mode = 444; },
   };
-  for (const [name, change] of Object.entries(refused)) assert.match(parsed(change).thrown ?? '', /manifest/, `${name}: should be refused by the manifest check`);
-  assert.match(parsed(m => { m.entries[0].path = '/bin'; }).thrown ?? '', /manifest/, 'an absolute path');
+  for (const [name, change] of Object.entries(refused)) assert.match(parsed(change).thrown ?? '', /^(the manifest|manifest entry) /, `${name}: should be refused by the manifest check`);
+  assert.match(parsed(m => { m.entries[0].path = '/bin'; }).thrown ?? '', /^(the manifest|manifest entry) /, 'an absolute path');
   assert.ok(thrownOf(() => parseManifest('not json')));
   assert.ok(thrownOf(() => parseManifest('[]')));
   assert.ok(thrownOf(() => parseManifest('null')));
