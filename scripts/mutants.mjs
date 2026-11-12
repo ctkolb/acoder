@@ -99,7 +99,9 @@ export default async function* reporter(source) {
       fileLevel: file !== null && data.nesting === 0 && [file, path.basename(file), path.relative(process.cwd(), file)].includes(data.name),
       suite: data.details?.type === 'suite', skip: Boolean(data.skip), todo: Boolean(data.todo),
       failureType: error?.failureType ?? null,
-      assertion: (error?.cause?.code ?? null) === 'ERR_ASSERTION',
+      // The error crosses a process boundary as plain data, so `instanceof` is not available: an assertion failure is an
+      // AssertionError by name AND by code. Either alone is a writable property that any thrown Error can carry.
+      assertion: error?.cause?.name === 'AssertionError' && error?.cause?.code === 'ERR_ASSERTION',
       message: message.slice(0, 1000),
     })}\n`;
   }

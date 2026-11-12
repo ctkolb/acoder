@@ -434,6 +434,22 @@ test('mutants: an assertion failure next to another kind of failure is INVALID, 
   assert.equal(run.status, 1);
 });
 
+test('mutants: an ordinary error that carries the assertion code is INVALID, not KILLED', { timeout: 100_000 }, async t => {
+  const forge = "const error = new Error('forged'); error.code = 'ERR_ASSERTION'; throw error;";
+  const fx = await fixture(t, { mutants: [
+    mutant('forged-code', { anchor: 'work = () => 1;', replacement: `work = () => { ${forge} };` }),
+    mutant('real-assertion'),
+  ] });
+  const run = await execute(fx);
+  const result = await resultOf(fx, run);
+  const forged = byName(result, 'forged-code');
+  assert.equal(forged.result, 'INVALID');
+  assert.equal(forged.detail, 'setup');
+  assert.equal(forged.assertion_failures, 0, 'a writable code property is not an assertion failure');
+  assert.equal(byName(result, 'real-assertion').result, 'KILLED', 'a failure from the assertion library still kills');
+  assert.equal(run.status, 1);
+});
+
 test('mutants: a result file that appears during the run is never overwritten', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [mutant('kill')] });
   const run = await execute(fx, standard(fx), { env: { RACE_OUT: fx.out } });
