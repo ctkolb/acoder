@@ -1,13 +1,21 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import test from 'node:test';
+import nodeTest, { describe } from 'node:test';
 import { parseArguments, summarizeEvents } from './mutants.mjs';
+
+// Self-tests only share the machine (each builds its own package and TMPDIR), so they run four at a time. Registering
+// through this function keeps G11 checked: a test without a finite time limit of its own stops the file from loading.
+const registered = [];
+const test = (name, options, fn) => {
+  assert.ok(Number.isFinite(options?.timeout), `${name}: every self-test needs a finite timeout option`);
+  registered.push([name, options, fn]);
+};
 
 const runnerPath = fileURLToPath(new URL('./mutants.mjs', import.meta.url));
 const sha = text => createHash('sha256').update(text).digest('hex');
@@ -132,12 +140,18 @@ test('source is pristine', () => {
 
 const standard = fx => ['--mutants', fx.mutantsFile, '--out', fx.out, '--root', fx.root];
 
+// Runs the runner asynchronously: a blocking spawnSync would stop the other self-tests (and their time limits) running.
 function execute(fx, args = standard(fx), { env = {}, cwd = fx.work } = {}) {
   const inherited = { ...process.env };
   delete inherited.NODE_TEST_CONTEXT; // A nested `node --test` must not believe it is a child of this one.
-  return spawnSync(process.execPath, [runnerPath, ...args], {
-    cwd, encoding: 'utf8', timeout: 100_000,
-    env: { ...inherited, TMPDIR: fx.tmp, OBS: fx.obs, FLAKE: fx.flake, HOOKS: fx.hooks, PIDS: fx.pids, ...env },
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, [runnerPath, ...args], {
+      cwd, env: { ...inherited, TMPDIR: fx.tmp, OBS: fx.obs, FLAKE: fx.flake, HOOKS: fx.hooks, PIDS: fx.pids, ...env }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const output = { stdout: '', stderr: '' };
+    for (const stream of ['stdout', 'stderr']) child[stream].setEncoding('utf8').on('data', chunk => { output[stream] += chunk; });
+    const timer = setTimeout(() => child.kill('SIGTERM'), 100_000);
+    child.on('close', (status, signal) => { clearTimeout(timer); resolve({ status, signal, ...output }); });
   });
 }
 
@@ -199,7 +213,7 @@ test('mutants: command line errors are exit code 2 with one line and no other ef
     'existing out file': ['--mutants', fx.mutantsFile, '--out', path.join(fx.work, 'existing.json'), '--root', fx.root],
   };
   for (const [label, args] of Object.entries(cases)) {
-    const run = execute(fx, args);
+    const run = await execute(fx, args);
     assertRefused(fx, run, before, await snapshot(fx.root));
     assert.deepEqual(await readdir(fx.tmp), [], `${label}: temporary copies were left behind`);
     assert.equal(existsSync(fx.out), false, `${label}: wrote the result file`);
@@ -252,7 +266,7 @@ test('mutants: the mutants file shape is validated before anything runs', { time
   };
   for (const [label, shape] of Object.entries(shapes)) {
     await fx.setMutants(shape);
-    const run = execute(fx);
+    const run = await execute(fx);
     assert.equal(run.status, 2, `${label}: expected exit code 2, got ${run.status}; stderr: ${run.stderr}`);
     assert.equal(run.stderr.trim().split('\n').length, 1, `${label}: one line on stderr, got ${JSON.stringify(run.stderr)}`);
     assert.equal(existsSync(fx.out), false, `${label}: wrote the result file`);
@@ -269,7 +283,7 @@ test('mutants: a zero-test and a skip-only module are INVALID', { timeout: 100_0
     mutant('missing-module', { modules: ['test/absent.test.mjs'] }),
     mutant('fine'),
   ] });
-  const run = execute(fx);
+  const run = await execute(fx);
   const result = await resultOf(fx, run);
   for (const name of ['zero', 'skip-only', 'one-bad-module', 'missing-module']) {
     const found = byName(result, name);
@@ -291,7 +305,7 @@ test('mutants: a hanging test is INVALID by timeout', { timeout: 100_000 }, asyn
   for (;;) {}
 };`,
   })] });
-  const run = execute(fx, [...standard(fx), '--timeout-seconds', '8']);
+  const run = await execute(fx, [...standard(fx), '--timeout-seconds', '5']);
   const result = await resultOf(fx, run);
   const found = byName(result, 'hang');
   assert.equal(found.result, 'INVALID');
@@ -311,7 +325,7 @@ test('mutants: a hanging test is INVALID by timeout', { timeout: 100_000 }, asyn
 
 test('mutants: known assertion kill', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [mutant('add-minus')] });
-  const run = execute(fx);
+  const run = await execute(fx);
   const result = await resultOf(fx, run);
   const found = byName(result, 'add-minus');
   assert.equal(run.status, 0, run.stderr);
@@ -335,7 +349,7 @@ test('mutants: known assertion kill', { timeout: 100_000 }, async t => {
 
 test('mutants: survivor is rerun and reported', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [survivor('mul-plus')] });
-  const run = execute(fx);
+  const run = await execute(fx);
   const result = await resultOf(fx, run);
   const found = byName(result, 'mul-plus');
   assert.equal(found.result, 'SURVIVED');
@@ -361,7 +375,7 @@ test('mutants: missing and duplicate anchors are INVALID', { timeout: 100_000 },
   const outside = path.join(fx.work, 'outside.mjs');
   await writeFile(outside, 'export const add = (a, b) => a + b;\n');
   await symlink(outside, path.join(fx.root, 'src/link.mjs'));
-  const run = execute(fx);
+  const run = await execute(fx);
   const result = await resultOf(fx, run);
   for (const name of ['absent-anchor', 'duplicate-anchor', 'missing-file', 'no-op', 'through-link']) {
     assert.equal(byName(result, name).result, 'INVALID', name);
@@ -380,7 +394,7 @@ test('mutants: a load error is INVALID, not KILLED', { timeout: 100_000 }, async
     mutant('throws-at-load', { anchor: 'export const CASES = 2;', replacement: "throw new Error('load');\nexport const CASES = 2;" }),
     mutant('throws-in-test', { anchor: 'work = () => 1;', replacement: "work = () => { throw new TypeError('not an assertion'); };" }),
   ] });
-  const run = execute(fx);
+  const run = await execute(fx);
   const result = await resultOf(fx, run);
   for (const name of ['syntax-error', 'missing-import', 'throws-at-load', 'throws-in-test']) {
     assert.equal(byName(result, name).result, 'INVALID', name);
@@ -396,7 +410,7 @@ test('mutants: an assertion failure next to another kind of failure is INVALID, 
     anchor: both,
     replacement: "export const add = (a, b) => a - b;\nexport const mul = (a, b) => a * b;\nexport const work = () => { throw new Error('not an assertion'); };",
   })] });
-  const run = execute(fx);
+  const run = await execute(fx);
   const found = byName(await resultOf(fx, run), 'assertion-and-throw');
   assert.equal(found.result, 'INVALID');
   assert.equal(found.detail, 'setup');
@@ -406,7 +420,7 @@ test('mutants: an assertion failure next to another kind of failure is INVALID, 
 
 test('mutants: a result file that appears during the run is never overwritten', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [mutant('kill')] });
-  const run = execute(fx, standard(fx), { env: { RACE_OUT: fx.out } });
+  const run = await execute(fx, standard(fx), { env: { RACE_OUT: fx.out } });
   assert.equal(run.status, 2, run.stderr);
   assert.equal(run.stderr.trim().split('\n').length, 1);
   assert.equal(await readFile(fx.out, 'utf8'), 'created by a test');
@@ -420,7 +434,7 @@ test('mutants: fewer tests, more tests and skipped tests than the baseline are I
     mutant('skipped', { anchor: 'SKIP = false;', replacement: 'SKIP = true;' }),
     mutant('exits-early', { anchor: 'work = () => 1;', replacement: 'work = () => process.exit(0);' }),
   ] });
-  const run = execute(fx);
+  const run = await execute(fx);
   const result = await resultOf(fx, run);
   for (const name of ['fewer', 'more', 'skipped', 'exits-early']) {
     assert.equal(byName(result, name).result, 'INVALID', name);
@@ -452,7 +466,7 @@ test('mutants: the root is unchanged', { timeout: 100_000 }, async t => {
   await mkdir(path.join(fx.root, 'sub/dir'), { recursive: true });
   await writeFile(path.join(fx.root, 'sub/dir/data.txt'), 'data\n');
   const before = await snapshot(fx.root);
-  const run = execute(fx);
+  const run = await execute(fx);
   const result = await resultOf(fx, run);
   assert.deepEqual(result.mutants.map(m => m.result), ['KILLED', 'SURVIVED', 'INVALID', 'INVALID']);
   assert.deepEqual(await snapshot(fx.root), before);
@@ -472,7 +486,7 @@ async function realpathOf(file) {
 
 test('mutants: neutral control survives', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [mutant('kill')] });
-  const run = execute(fx);
+  const run = await execute(fx);
   const result = await resultOf(fx, run);
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(result.control, { result: 'SURVIVED' });
@@ -491,7 +505,7 @@ test('mutants: a broken control invalidates the run', { timeout: 100_000 }, asyn
     mutant('kill', { modules: [CALC, 'test/pristine.test.mjs'] }),
     survivor('survive', { modules: [CALC, 'test/pristine.test.mjs'] }),
   ] });
-  const run = execute(fx);
+  const run = await execute(fx);
   const result = await resultOf(fx, run);
   assert.notEqual(result.control.result, 'SURVIVED');
   for (const found of result.mutants) {
@@ -508,7 +522,7 @@ test('mutants: an expected EQUIVALENT that is killed is unexpected', { timeout: 
     survivor('real-equivalent', { expect: 'EQUIVALENT', why: 'mul has no caller' }),
     survivor('no-reason', { expect: 'EQUIVALENT', why: '  ' }),
   ] });
-  const run = execute(fx);
+  const run = await execute(fx);
   const result = await resultOf(fx, run);
   assert.equal(byName(result, 'claimed-equivalent').result, 'KILLED');
   assert.equal(byName(result, 'real-equivalent').result, 'EQUIVALENT');
@@ -551,29 +565,29 @@ test('mutants: the result file matches the schema and the exit code rule', { tim
     mutant('kill'),
     survivor('equivalent', { expect: 'EQUIVALENT', why: 'mul has no caller' }),
   ] });
-  const run = execute(fx);
+  const run = await execute(fx);
   const result = await resultOf(fx, run);
   assertSchema(result, fx);
   assert.deepEqual(result.summary, { killed: 1, survived: 0, equivalent: 1, invalid: 0, unexpected: 0 });
   assert.equal(run.status, 0, 'everything equals its expectation');
-  assert.equal(execute(fx).status, 2, 'a second run refuses the existing result file');
+  assert.equal((await execute(fx)).status, 2, 'a second run refuses the existing result file');
 
   await rm(fx.out);
   await fx.setMutants([mutant('kill'), mutant('bad-anchor', { anchor: 'nothing like it' })]);
-  const withInvalid = execute(fx);
+  const withInvalid = await execute(fx);
   assert.equal(withInvalid.status, 1, 'an INVALID result fails the run');
   assert.equal((await resultOf(fx, withInvalid)).summary.invalid, 1);
 
   await rm(fx.out);
   await fx.setMutants([mutant('kill'), survivor('unexpected-survivor')]);
-  const unexpected = execute(fx);
+  const unexpected = await execute(fx);
   assert.equal(unexpected.status, 1, 'an unexpected result fails the run');
   assert.deepEqual((await resultOf(fx, unexpected)).summary, { killed: 1, survived: 1, equivalent: 0, invalid: 0, unexpected: 1 });
 });
 
 test('mutants: the caller environment and MUTANT_NAME reach every test run', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [mutant('kill'), survivor('survive')] });
-  const run = execute(fx, standard(fx), { env: { ACODER_PROBE: 'probe-value' } });
+  const run = await execute(fx, standard(fx), { env: { ACODER_PROBE: 'probe-value' } });
   await resultOf(fx, run);
   const seen = await observations(fx);
   assert.deepEqual(seen.map(entry => entry.name).sort(), [
@@ -584,7 +598,7 @@ test('mutants: the caller environment and MUTANT_NAME reach every test run', { t
 
 test('mutants: --after-each-script runs after every test run, in the root, with MUTANT_NAME', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [mutant('kill'), mutant('bad-anchor', { anchor: 'nothing like it' })] });
-  const run = execute(fx, [...standard(fx), '--after-each-script', 'hook']);
+  const run = await execute(fx, [...standard(fx), '--after-each-script', 'hook']);
   const result = await resultOf(fx, run);
   assert.equal(run.status, 1);
   const log = (await readFile(path.join(fx.hooks, 'hooks.log'), 'utf8')).trim().split('\n');
@@ -598,7 +612,7 @@ test('mutants: --after-each-script runs after every test run, in the root, with 
   for (const [at, expectedRuns] of [[1, 1], [2, 2]]) {
     await rm(fx.out);
     await fx.setMutants([survivor('failing-hook', { expect: 'EQUIVALENT', why: 'mul has no caller' })]);
-    const failing = execute(fx, [...standard(fx), '--after-each-script', 'hook'], { env: { FAIL_HOOK: 'failing-hook', FAIL_HOOK_AT: String(at) } });
+    const failing = await execute(fx, [...standard(fx), '--after-each-script', 'hook'], { env: { FAIL_HOOK: 'failing-hook', FAIL_HOOK_AT: String(at) } });
     const found = byName(await resultOf(fx, failing), 'failing-hook');
     assert.equal(found.result, 'INVALID');
     assert.match(found.detail, /^hook/);
@@ -614,7 +628,7 @@ test('mutants-flaky: an unrelated assertion that fails once is INVALID, not KILL
     flaky('assertion', 'fails-once'),
     mutant('steady-kill', { modules: [CALC, 'test/other.test.mjs'] }),
   ] });
-  const run = execute(fx, standard(fx), { env: { FLAKE_UNRELATED: 'killed-but-flaky' } });
+  const run = await execute(fx, standard(fx), { env: { FLAKE_UNRELATED: 'killed-but-flaky' } });
   const result = await resultOf(fx, run);
   const found = byName(result, 'killed-but-flaky');
   assert.equal(found.result, 'INVALID');
@@ -632,7 +646,7 @@ test('mutants-flaky: baseline runs that disagree in counts make dependent mutant
     mutant('depends-on-count', { modules: [CALC, 'test/count.test.mjs'] }),
     mutant('independent'),
   ] });
-  const run = execute(fx);
+  const run = await execute(fx);
   const result = await resultOf(fx, run);
   assert.equal(byName(result, 'depends-on-count').result, 'INVALID');
   assert.equal(byName(result, 'depends-on-count').detail, 'baseline');
@@ -646,7 +660,7 @@ test('mutants-flaky: a timeout, a setup failure and a hook failure in the second
     flaky('setup', 'second-setup'),
     survivor('second-hook', { expect: 'EQUIVALENT', why: 'mul has no caller' }),
   ] });
-  const run = execute(fx, [...standard(fx), '--timeout-seconds', '8', '--after-each-script', 'hook'], { env: { FAIL_HOOK: 'second-hook', FAIL_HOOK_AT: '2' } });
+  const run = await execute(fx, [...standard(fx), '--timeout-seconds', '5', '--after-each-script', 'hook'], { env: { FAIL_HOOK: 'second-hook', FAIL_HOOK_AT: '2' } });
   const result = await resultOf(fx, run);
   const expected = { 'second-timeout': 'timeout', 'second-setup': 'setup', 'second-hook': 'hook' };
   for (const [name, detail] of Object.entries(expected)) {
@@ -656,4 +670,8 @@ test('mutants-flaky: a timeout, a setup failure and a hook failure in the second
     assert.equal(found.runs.length, 2, `${name} was run twice and both runs are recorded`);
   }
   assert.equal(run.status, 1);
+});
+
+describe('mutants', { concurrency: 4 }, () => {
+  for (const [name, options, fn] of registered) nodeTest(name, options, fn);
 });
