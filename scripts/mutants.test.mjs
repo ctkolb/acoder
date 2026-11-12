@@ -480,6 +480,21 @@ test('outside', () => {});
   }
 });
 
+test('mutants: a root that contains the temporary directory is refused cleanly', { timeout: 60_000 }, async t => {
+  const fx = await fixture(t, { mutants: [mutant('kill')] });
+  await mkdir(path.join(fx.root, 'tmp/deeper'), { recursive: true });
+  const before = await snapshot(fx.root);
+  const cases = { 'TMPDIR inside the root': path.join(fx.root, 'tmp'), 'TMPDIR deep inside the root': path.join(fx.root, 'tmp/deeper'), 'TMPDIR is the root': fx.root };
+  for (const [label, tmpdir] of Object.entries(cases)) {
+    const run = await execute(fx, standard(fx), { env: { TMPDIR: tmpdir } });
+    assertRefused(fx, run, before, await snapshot(fx.root));
+    assert.match(run.stderr, /TMPDIR/, `${label}: the line names the cause`);
+    assert.equal(existsSync(fx.out), false, `${label}: wrote the result file`);
+  }
+  const outside = await execute(fx);
+  assert.equal(outside.status, 0, `a TMPDIR outside the root works: ${outside.stderr}`);
+});
+
 test('mutants: a result file that appears during the run is never overwritten', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [mutant('kill')] });
   const run = await execute(fx, standard(fx), { env: { RACE_OUT: fx.out } });

@@ -366,7 +366,17 @@ async function runControl(context, mutants, usable, modules) {
   return null;
 }
 
+// The session holds copies of the root, so it must not be inside the root: copying a directory into itself fails.
+async function refuseTemporaryDirectoryInRoot(root) {
+  const temporary = await realpath(os.tmpdir()).catch(() => path.resolve(os.tmpdir()));
+  const relative = path.relative(await realpath(root), temporary);
+  if (relative.split(path.sep)[0] !== '..' && !path.isAbsolute(relative)) {
+    throw new UsageError(`--root contains the temporary directory ${temporary}; set TMPDIR to a directory outside the root`);
+  }
+}
+
 export async function run(options, mutants) {
+  await refuseTemporaryDirectoryInRoot(options.root);
   const session = await mkdtemp(path.join(os.tmpdir(), 'acoder-mutants-'));
   sessions.add(session);
   try {
