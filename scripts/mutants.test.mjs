@@ -593,6 +593,25 @@ test('mutants: a broken control invalidates the run', { timeout: 100_000 }, asyn
   assert.equal(run.status, 1);
 });
 
+test('mutants: a control that cannot run because no module has a valid baseline makes every result INVALID with detail control', { timeout: 60_000 }, async t => {
+  const fx = await fixture(t, { mutants: [
+    mutant('zero', { modules: ['test/empty.test.mjs'] }),
+    mutant('skip-only', { modules: ['test/skip.test.mjs'] }),
+    mutant('missing-module', { modules: ['test/absent.test.mjs'] }),
+  ] });
+  const run = await execute(fx);
+  const result = await resultOf(fx, run);
+  assert.deepEqual(result.control, { result: 'INVALID' });
+  for (const found of result.mutants) {
+    assert.equal(found.result, 'INVALID', found.name);
+    assert.equal(found.detail, 'control', found.name);
+    assert.deepEqual(found.runs, [], `${found.name} must not run a test`);
+    assert.match(found.first_failure, /no module has a valid baseline/, found.name);
+  }
+  assert.equal(result.summary.invalid, 3);
+  assert.equal(run.status, 1);
+});
+
 test('mutants: an expected EQUIVALENT that is killed is unexpected', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [
     mutant('claimed-equivalent', { expect: 'EQUIVALENT', why: 'believed harmless' }),

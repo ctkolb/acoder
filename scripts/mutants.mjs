@@ -351,17 +351,19 @@ async function evaluate(context, mutant, usable, index) {
 const HASH_COMMENTS = /\.(?:sh|bash|py|rb|ya?ml|toml|conf|ini)$/;
 
 // The neutral control appends one comment line to the first mutated file and must survive on every usable module.
-// It is not a mutant: it has no entry in the result list. Returns null when there is nothing to run it on.
+// It is not a mutant: it has no entry in the result list. It is INVALID when it cannot run because no module has a valid
+// baseline, and null when no mutated file can be read (every mutant is then INVALID on its own anchor).
 async function runControl(context, mutants, usable, modules) {
   const controlModules = modules.filter(module => usable.get(module) !== null);
-  if (controlModules.length === 0) return null;
+  if (controlModules.length === 0) return { result: 'INVALID', explanation: 'the neutral control could not run: no module has a valid baseline' };
   for (const { file } of mutants) {
     const source = await sourceText(context.root, file);
     if (source.invalid) continue;
     const comment = HASH_COMMENTS.test(file) ? '# acoder-mutants neutral control' : '// acoder-mutants neutral control';
     const text = `${source.text}${source.text.endsWith('\n') ? '' : '\n'}${comment}\n`;
     const { verdicts } = await runTwice(context, { name: CONTROL_NAME, file, modules: controlModules }, text, sumCounts(usable, controlModules), 'control');
-    return settle(verdicts).outcome;
+    const { outcome, explanation } = settle(verdicts);
+    return { result: outcome, explanation: `the neutral control did not survive (${explanation ?? outcome})` };
   }
   return null;
 }
@@ -387,14 +389,14 @@ export async function run(options, mutants) {
     const control = await runControl(context, mutants, usable, modules);
     const results = [];
     for (const [index, mutant] of mutants.entries()) {
-      if (control !== null && control !== 'SURVIVED') {
-        results.push(invalidResult(mutant, 'control', `the neutral control did not survive (${control})`));
+      if (control !== null && control.result !== 'SURVIVED') {
+        results.push(invalidResult(mutant, 'control', control.explanation));
         continue;
       }
       const prepared = mutant.modules.some(module => usable.get(module) === null) ? null : true;
       results.push(prepared === null ? invalidResult(mutant, 'baseline', 'a baseline of its modules is not valid') : await evaluate(context, mutant, usable, index));
     }
-    return await finish(options, runs, modules, control ?? 'INVALID', results);
+    return await finish(options, runs, modules, control?.result ?? 'INVALID', results);
   } finally {
     sessions.delete(session);
     await rm(session, { recursive: true, force: true });
