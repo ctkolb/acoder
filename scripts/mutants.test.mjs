@@ -450,6 +450,36 @@ test('mutants: an ordinary error that carries the assertion code is INVALID, not
   assert.equal(run.status, 1);
 });
 
+test('mutants: a module that is or passes through a symbolic link is refused before any test runs', { timeout: 60_000 }, async t => {
+  const fx = await fixture(t, { mutants: [mutant('kill')] });
+  const outside = path.join(fx.work, 'outside');
+  const sentinel = path.join(fx.work, 'sentinel');
+  await mkdir(outside);
+  await writeFile(path.join(outside, 'outside.test.mjs'), `import test from 'node:test';
+import { writeFileSync } from 'node:fs';
+writeFileSync(process.env.SENTINEL, 'a test outside the copy ran');
+test('outside', () => {});
+`);
+  await symlink(path.join(outside, 'outside.test.mjs'), path.join(fx.root, 'test/link.test.mjs'));
+  await symlink('calc.test.mjs', path.join(fx.root, 'test/alias.test.mjs'));
+  await symlink(outside, path.join(fx.root, 'linked'));
+  const before = await snapshot(fx.root);
+  const cases = {
+    'a linked test file': 'test/link.test.mjs',
+    'a link to a file inside the root': 'test/alias.test.mjs',
+    'a linked directory': 'linked/outside.test.mjs',
+  };
+  for (const [label, module] of Object.entries(cases)) {
+    await fx.setMutants([mutant('kill'), mutant('linked', { modules: [CALC, module] })]);
+    const run = await execute(fx, standard(fx), { env: { SENTINEL: sentinel } });
+    assertRefused(fx, run, before, await snapshot(fx.root));
+    assert.match(run.stderr, /symbolic link/, label);
+    assert.equal(existsSync(sentinel), false, `${label}: a test outside the copy ran`);
+    assert.equal(existsSync(fx.out), false, `${label}: wrote the result file`);
+    assert.deepEqual(await readdir(fx.tmp), [], `${label}: temporary copies were left behind`);
+  }
+});
+
 test('mutants: a result file that appears during the run is never overwritten', { timeout: 100_000 }, async t => {
   const fx = await fixture(t, { mutants: [mutant('kill')] });
   const run = await execute(fx, standard(fx), { env: { RACE_OUT: fx.out } });

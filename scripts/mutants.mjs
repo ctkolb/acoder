@@ -242,6 +242,21 @@ async function sourceText(root, file) {
   return Buffer.from(text, 'utf8').equals(buffer) ? { text } : failedPrerequisite(`${file} is not UTF-8 text`);
 }
 
+// Refuses a module that is, or passes through, a symbolic link: the copy keeps links as they are, so such a module could
+// run a file outside the copy before anything is checked. Nothing has been created or run when this throws; a module
+// that does not exist is left to its baseline, where it is INVALID.
+async function refuseLinkedModules(root, mutants) {
+  for (const module of new Set(mutants.flatMap(mutant => mutant.modules))) {
+    let current = root;
+    for (const segment of module.split('/')) {
+      current = path.join(current, segment);
+      const info = await lstat(current).catch(() => null);
+      if (info === null) break;
+      if (info.isSymbolicLink()) throw new UsageError(`module ${JSON.stringify(module)} passes through a symbolic link`);
+    }
+  }
+}
+
 async function mutatedText(root, mutant) {
   const source = await sourceText(root, mutant.file);
   if (source.invalid) return source;
@@ -410,6 +425,7 @@ async function main(argv) {
   const mutants = validateMutants(text);
   if (await lstat(options.out).then(() => true, () => false)) throw new UsageError(`the result file already exists: ${options.out}`);
   if (!(await stat(path.dirname(options.out)).catch(() => null))?.isDirectory()) throw new UsageError(`the directory of --out does not exist: ${path.dirname(options.out)}`);
+  await refuseLinkedModules(options.root, mutants);
   return run(options, mutants);
 }
 
