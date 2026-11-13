@@ -57,7 +57,7 @@ t('seams: the production command passes no test seam', () => {
   assert.deepEqual(calls, ['main(process.argv.slice(2), process.env, { adapters, providers, launchEnabled: LAUNCH_ENABLED });']);
   assert.match(source, /import \{ LAUNCH_ENABLED \} from '\.\.\/lib\/enabled\.mjs'/);
   const imports = [...source.matchAll(/from '([^']+)'/g)].map(match => match[1]).sort();
-  assert.deepEqual(imports, ['../lib/cli.mjs', '../lib/enabled.mjs', '../lib/registries.mjs']);
+  assert.deepEqual(imports, ['../adapters/index.mjs', '../lib/cli.mjs', '../lib/enabled.mjs', '../providers/index.mjs']);
   const enabled = fs.readFileSync(path.join(LAUNCHER, 'lib', 'enabled.mjs'), 'utf8');
   assert.match(enabled, /^export const LAUNCH_ENABLED = false;$/m);
 });

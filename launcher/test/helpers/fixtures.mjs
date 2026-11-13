@@ -6,7 +6,9 @@ import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { adapters, providers } from '../../lib/registries.mjs';
+import { adapters } from '../../adapters/index.mjs';
+import { providers } from '../../providers/index.mjs';
+import * as stub from './stub-adapter.mjs';
 
 // The result of a call, or a failed assertion (never a bare Error) when it throws: tests of modules under test call them through this.
 export const must = fn => { try { return fn(); } catch (error) { if (error?.code === 'ERR_ASSERTION') throw error; assert.fail(`threw: ${String(error?.message ?? error)}`); } };
@@ -183,7 +185,7 @@ export async function runMain(argv, { env = {}, deps = {} } = {}) {
   const out = [];
   const err = [];
   const code = await main(argv, env, {
-    adapters: { ...adapters, stub: { name: 'stub', providers: ['openai'] } }, providers, launchEnabled: false, ...deps,
+    adapters: { ...adapters, stub }, providers, launchEnabled: false, ...deps,
     stdout: { write: text => out.push(text) }, stderr: { write: text => err.push(text) },
   });
   return { code, stdout: out.join(''), stderr: err.join('') };
