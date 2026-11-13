@@ -114,8 +114,11 @@ export function checkWritableAbsent(writable) {
 
 // A2.7.1
 export function checkOwnMailbox(mailbox) {
-  const directory = fs.lstatSync(path.join(mailbox, 'orchestrator'), { throwIfNoEntry: false });
-  const ledger = directory?.isDirectory() ? fs.lstatSync(path.join(mailbox, 'orchestrator', 'tickets.json'), { throwIfNoEntry: false }) : undefined;
+  let ledger;
+  try {
+    const directory = fs.lstatSync(path.join(mailbox, 'orchestrator'), { throwIfNoEntry: false });
+    ledger = directory?.isDirectory() ? fs.lstatSync(path.join(mailbox, 'orchestrator', 'tickets.json'), { throwIfNoEntry: false }) : undefined;
+  } catch { throw new Refusal(`cannot read ${safe(path.join(mailbox, 'orchestrator'))} while checking the run mailbox`); }
   if (!ledger?.isFile()) throw new Refusal(`${safe(mailbox)} is not a run mailbox (no orchestrator/tickets.json)`);
 }
 
