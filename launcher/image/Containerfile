@@ -1,0 +1,8 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG AGENT_NPM_PACKAGE
+ARG AGENT_CLI_VERSION
+RUN test -n "${AGENT_NPM_PACKAGE}" && test -n "${AGENT_CLI_VERSION}"
+RUN node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 22 ? 0 : 1)"
+RUN command -v sh sha256sum cp chmod patch diff
+RUN npm install --global "${AGENT_NPM_PACKAGE}@${AGENT_CLI_VERSION}" && npm cache clean --force

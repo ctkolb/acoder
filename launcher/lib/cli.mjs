@@ -1,10 +1,13 @@
 // main(argv, env, deps): dispatch, exit codes and the last line of A1.6. The binary and the tests call this one function.
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { parseExportManifest, parseReviewRun } from './args.mjs';
 import { writeManifest } from './integrity.mjs';
 import { checkApiKey, loadDefaults, loadOwnerConfig, resolveSettings } from './config.mjs';
 import { checkHomeRule, checkInputPath, resolveHome } from './paths.mjs';
+import { PLACEHOLDER_KEY, agentEnvNames, buildPlan, containerBaseUrl, endpointParts } from './plan.mjs';
 import { prepare } from './prepare.mjs';
+import { canonicalHash, makeRunId } from './record.mjs';
 import { Refusal, safe } from './refusal.mjs';
 import { OUTCOMES } from './state.mjs';
 
@@ -20,6 +23,7 @@ export function formatLastLine({ tag, outcome, record }) {
   return `ACODER LAUNCH ${tag} ${outcome} ${record}`;
 }
 
+export const LAUNCHER_VERSION = '0.1.0';
 const GUARD = 'this build of the launcher is incomplete; container launch is disabled';
 const TICKET_NAME = /^ticket-([A-Za-z0-9._-]{1,120})\.md$/;
 
@@ -31,7 +35,31 @@ function checkSource(file, label, home) {
 
 const tagOf = ticket => TICKET_NAME.exec(ticket.slice(ticket.lastIndexOf('/') + 1))?.[1] ?? '-';
 
-function dryRunPlan(options, settings, prepared) {
+// A15: the complete runtime arguments of both containers, the volume and the network. A dry run has not inspected the image, so the image
+// argument is the reference as given, and the runtime is `--runtime` or Docker (the plan only differs in a few Podman options).
+function launchPlan(options, settings, prepared, deps) {
+  const { host } = endpointParts(settings.endpoint);
+  const command = deps.adapters[settings.agent].command({
+    model: settings.model, effort: settings.effort, provider: { id: settings.provider, baseUrl: containerBaseUrl(settings.endpoint), placeholderKey: PLACEHOLDER_KEY },
+    firstMessage: `This is an acoder container launch. TICKET ${prepared.tag} at ${options.ticket}`, workdir: prepared.writable.scratch,
+  });
+  const skillSha256 = canonicalHash(prepared.staging.skill);
+  const names = agentEnvNames(command.env, []);
+  return buildPlan({
+    runtime: options.runtime ?? 'docker', runId: makeRunId(), tag: prepared.tag, ticketSha256: prepared.ticket.sha256, skillSha256, launcherVersion: LAUNCHER_VERSION,
+    uid: process.getuid(), gid: process.getgid(), image: options.image, imageEnvNames: [], mailbox: options.mailbox,
+    exports: options.exports.map(({ role }) => ({ role, dir: prepared.exports[role].dir, insideMailbox: prepared.exports[role].inside_mailbox })),
+    staging: {
+      dir: prepared.staging.dir, mailbox: prepared.staging.mailbox, agentPayload: path.join(prepared.staging.dir, 'agent-payload'), egressPayload: path.join(prepared.staging.dir, 'egress-payload'),
+      exports: Object.fromEntries(options.exports.map(({ role }) => [role, prepared.exports[role].copy])),
+    },
+    writable: { scratch: prepared.writable.scratch, reportMd: prepared.writable.reportMd, reportJson: prepared.writable.reportJson }, scratchSize: options.scratchSize, limits: settings.limits,
+    endpoint: settings.endpoint, provider: { id: settings.provider }, agent: command, extraCa: options.extraCaCert !== null, eventPrefix: randomBytes(16).toString('hex'),
+    probeInput: { hashes: { ticket_sha256: prepared.ticket.sha256, skill_sha256: skillSha256 }, p6_addresses: [], allowed_names: [host], env_names: names },
+  });
+}
+
+function dryRunPlan(options, settings, prepared, deps) {
   return {
     schema: 'acoder-launch-plan/0', dry_run: true, tag: tagOf(options.ticket),
     agent: settings.agent, provider: settings.provider, model: settings.model, effort: settings.effort, endpoint: settings.endpoint, limits: settings.limits,
@@ -43,7 +71,8 @@ function dryRunPlan(options, settings, prepared) {
       manifest_sha256: prepared.manifests[role].sha256, source_commit: prepared.manifests[role].source_commit, tree_sha256: prepared.exports[role].tree_sha256, entries: prepared.exports[role].entries,
     })),
     writable: { scratch: prepared.writable.scratch, report_md: prepared.writable.reportMd, report_json: prepared.writable.reportJson },
-    snapshot: { bytes: prepared.snapshot.bytes, entries: prepared.snapshot.entries, skill_sha256: prepared.skillSha256 },
+    snapshot: { bytes: prepared.snapshot.bytes, entries: prepared.snapshot.entries, skill_sha256: canonicalHash(prepared.staging.skill) },
+    launch: launchPlan(options, settings, prepared, deps),
   };
 }
 
@@ -60,7 +89,7 @@ async function reviewRun(argv, env, deps, io) {
     const prepared = prepare(options, env, deps);
     try {
       if (!options.dryRun) throw new Refusal('the launch sequence is not available in this build part');
-      io.stdout.write(`${JSON.stringify(dryRunPlan(options, settings, prepared), null, 2)}\n`);
+      io.stdout.write(`${JSON.stringify(dryRunPlan(options, settings, prepared, deps), null, 2)}\n`);
       return 0;
     } finally {
       prepared.cleanup();

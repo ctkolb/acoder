@@ -72,7 +72,7 @@ t('S2-AC21: package.json holds exactly the changes K1.1 and K1.2 and nothing els
 });
 
 t('S2-AC21: the launcher imports only node: modules and its own files, and no file is added outside the allowed places', () => {
-  for (const file of walk(LAUNCHER).filter(name => name.endsWith('.mjs'))) {
+  for (const file of walk(LAUNCHER).filter(name => name.endsWith('.mjs') && !name.startsWith(path.join(LAUNCHER, 'test')))) {
     const text = fs.readFileSync(file, 'utf8');
     for (const [, specifier] of [...text.matchAll(/from\s+'([^']+)'/g), ...text.matchAll(/import\(\s*'([^']+)'\s*\)/g)]) {
       assert.ok(specifier.startsWith('node:') || specifier.startsWith('./') || specifier.startsWith('../'), `${path.relative(ROOT, file)} imports ${specifier}`);

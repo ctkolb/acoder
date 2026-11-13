@@ -81,8 +81,8 @@ t('dod11-podman-args: the extra CA certificate adds one environment entry to the
   const p = plan({ extraCa: true });
   assert.deepEqual(p.egress.create, sidecarArgs({ extraCa: true }));
   assert.deepEqual(p.agent.create, agentArgs());
-  assert.deepEqual(p.egress.env_names, ['ACODER_RUN_ID', 'ACODER_UPSTREAM_KEY', 'NODE_EXTRA_CA_CERTS']);
-  assert.deepEqual(plan().egress.env_names, ['ACODER_RUN_ID', 'ACODER_UPSTREAM_KEY']);
+  assert.deepEqual(p.egress.env_names, ['ACODER_RUN_ID', 'ACODER_UPSTREAM_KEY', 'NODE_EXTRA_CA_CERTS', 'NODE_VERSION', 'PATH'], 'with the names of the image');
+  assert.deepEqual(plan().egress.env_names, ['ACODER_RUN_ID', 'ACODER_UPSTREAM_KEY', 'NODE_VERSION', 'PATH']);
   assert.equal(p.network.agent_network, 'none');
 });
 
