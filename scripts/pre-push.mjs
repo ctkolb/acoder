@@ -58,7 +58,7 @@ export function checkArtifacts(root, commit) {
   }
 }
 
-export async function scanSecrets(root, range) {
+async function runGitleaks(root, scope, label) {
   const version = execFileSync('gitleaks', ['version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   const match = version.match(/^v?(\d+)\.(\d+)\.(\d+)/);
   assert.ok(match && (Number(match[1]) > 8 || Number(match[1]) === 8 && (Number(match[2]) > 30 || Number(match[2]) === 30 && Number(match[3]) >= 1)), 'Install Gitleaks 8.30.1 or newer');
@@ -68,15 +68,22 @@ export async function scanSecrets(root, range) {
     await writeFile(path.join(temporary, 'config.toml'), '[extend]\nuseDefault = true\n');
     await writeFile(path.join(temporary, 'empty.ignore'), '');
     execFileSync('gitleaks', ['git', root, '--no-banner', '--redact', '--ignore-gitleaks-allow',
-      '--config', path.join(temporary, 'config.toml'), '--gitleaks-ignore-path', path.join(temporary, 'empty.ignore'),
-      '--log-opts', `--full-history --no-ext-diff --no-textconv --diff-merges=first-parent ${range}`],
+      '--config', path.join(temporary, 'config.toml'), '--gitleaks-ignore-path', path.join(temporary, 'empty.ignore'), ...scope],
     { env: environment(), stdio: ['ignore', 'pipe', 'pipe'], maxBuffer });
   } catch (error) {
     // Scanner output and matched contents may contain private data. Never echo it.
-    throw new Error(`Secret scan failed for ${range}; inspect locally with gitleaks git --redact (exit ${error.status ?? 'unknown'}).`);
+    throw new Error(`Secret scan failed for ${label}; inspect locally with gitleaks git --redact (exit ${error.status ?? 'unknown'}).`);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
+}
+
+export function scanSecrets(root, range) {
+  return runGitleaks(root, ['--log-opts', `--full-history --no-ext-diff --no-textconv --diff-merges=first-parent ${range}`], range);
+}
+
+export function scanStaged(root) {
+  return runGitleaks(root, ['--staged'], 'staged changes');
 }
 
 export async function checkCommit(root, commit) {
