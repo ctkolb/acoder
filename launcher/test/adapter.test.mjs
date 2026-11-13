@@ -46,7 +46,7 @@ t('dod1-adapter: command returns the argv, environment and inline configuration 
   });
   // Another model and effort and directory; the endpoint path is passed through.
   const other = command({ model: 'gpt-5.1-mini:preview', effort: 'low', workdir: '/x/y', provider: { ...INPUT.provider, baseUrl: 'http://api.example.org:8080/openai/v2' } });
-  assert.deepEqual(other.argv.slice(6), ['/x/y', '-m', 'openai/gpt-5.1-mini:preview', INPUT.firstMessage]);
+  assert.deepEqual(other.argv.slice(7), ['/x/y', '-m', 'openai/gpt-5.1-mini:preview', INPUT.firstMessage]);
   const config = parseJson(other.env.OPENCODE_CONFIG_CONTENT);
   assert.deepEqual(Object.keys(config.provider.openai.models), ['gpt-5.1-mini:preview']);
   assert.equal(config.provider.openai.models['gpt-5.1-mini:preview'].options.reasoningEffort, 'low');
