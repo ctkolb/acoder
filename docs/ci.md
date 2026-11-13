@@ -1,6 +1,6 @@
 # Repository checks
 
-CI runs on pushes and pull requests, and can be started manually. The
+CI runs on pull requests and pushes to `main`, and can be started manually. The
 `Repository checks` job is suitable as a required branch protection check;
 enabling that protection is a repository administration step.
 
@@ -51,7 +51,18 @@ not the production report validator described in [tooling contracts](tooling.md)
 and passing CI does not establish that evidence is true or prompts behave as
 intended. Agent behavior evaluations and semantic protocol review remain separate.
 
-## Pre-push checks
+## Secret and privacy scan in CI
+
+The job installs Gitleaks 8.30.1 from the release archive after verifying its
+pinned SHA-256, then runs `node scripts/scan.mjs` on a full-history checkout. The
+scan applies the same hardened settings as the hook (default rules, redacted
+output, no repository ignore files or allow comments) to all reachable history, and
+applies the private-artifact rules to the checked-out tree. Keep the version in
+`.github/workflows/ci.yml` equal to the minimum enforced in `scripts/pre-push.mjs`;
+update both together with the checksum. Dependabot proposes weekly updates for
+action pins, npm and the actionlint module.
+
+## Pre-commit and pre-push checks
 
 Install [Gitleaks](https://github.com/gitleaks/gitleaks) 8.30.1 or newer alongside
 Node.js, Go and Git. After running the CI commands above once to populate the
@@ -61,11 +72,14 @@ dependency caches, enable the version-controlled hook for this clone:
 npm run hooks:install
 ```
 
-The installer sets the local `core.hooksPath` to `.githooks` and makes the hook
+The installer sets the local `core.hooksPath` to `.githooks` and makes the hooks
 executable. It refuses to replace another configured hooks directory or an
-existing default pre-push hook; integrate those manually. Installation is explicit
+existing default pre-commit or pre-push hook; integrate those manually. Installation is explicit
 and is not part of `npm ci`. To remove this installation, run
 `git config --local --unset core.hooksPath`.
+
+The pre-commit hook runs Gitleaks on staged changes with the same hardened
+settings. A missing or too-old Gitleaks blocks the commit.
 
 On a push, the hook reads Git's ref-update input and checks the commits actually
 being sent, including updates to branches other than the checked-out branch:
@@ -103,4 +117,4 @@ rules, historical defects and hook installation. The Gitleaks integration test
 runs when Gitleaks is on PATH and otherwise skips; the remaining tests require
 no scanner. Pattern-based checks cannot identify every private document or secret,
 so review outgoing changes before publishing. Local hooks can be bypassed; CI
-remains the required repository check.
+repeats the secret and privacy scans and remains the required repository check.

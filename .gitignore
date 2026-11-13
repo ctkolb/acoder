@@ -3,6 +3,11 @@
 .env
 .env.*
 !.env.example
+# credential material (also rejected by the pre-push and CI scans)
+*.pem
+*.key
+.aws/
+.ssh/
 *.local.*
 mailbox/
 scratch/
