@@ -83,7 +83,7 @@ t('dod7-recorded: the returned values are the ticket hash, the manifest hashes a
     assert.equal(result.exports.code.inside_mailbox, false);
     assert.equal(result.exports.docs.inside_mailbox, true);
     assert.equal(result.exports.code.entries, 7, 'the entries of the manifest');
-    assert.match(result.skillSha256, /^[0-9a-f]{64}$/);
+    assert.equal('skillSha256' in result, false);
     assert.ok(result.snapshot.bytes > 0 && result.snapshot.entries > 0);
   } finally { release(result); }
 }));

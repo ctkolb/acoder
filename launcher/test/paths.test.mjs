@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { checkOverlap, homeRuleViolation, isReservedTarget, resolveHome, writablePaths } from '../lib/paths.mjs';
 import nodeTest from 'node:test';
-import { attempt, expectRefusal, listing, makeFixture, withFixture } from './helpers/fixtures.mjs';
+import { attempt, expectRefusal, lastLine, listing, makeFixture, withFixture } from './helpers/fixtures.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
 const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
@@ -369,4 +369,39 @@ t('dod4-own-mailbox: an orchestrator entry that is a file is not a mailbox ledge
   fs.rmSync(path.join(fx.mailbox, 'orchestrator'), { recursive: true });
   fs.writeFileSync(path.join(fx.mailbox, 'orchestrator'), 'not a directory');
   await expectRefusal(fx, {}, /is not a run mailbox/);
+}));
+
+// An orchestrator directory that the search finds but cannot read is a refusal of A2.7.2 (the search did not complete), not an internal error.
+// G11: root bypasses directory permissions, so the cases cannot run as root and are reported as skipped with that reason.
+const tUnlessRoot = (name, fn, timeout = 30000) => nodeTest(name, { timeout, skip: process.getuid?.() === 0 ? 'running as root: directory permissions are not enforced, so the directory stays readable' : false }, fn);
+// expectRefusal lists the fixture, and the listing cannot enter a directory that is unreadable, so this variant lists it while the
+// directory is readable (before the run and again after it) and checks that the run left the directory unreadable.
+const expectRefusalWhileUnreadable = async (fx, directory, pattern) => {
+  fs.mkdirSync(directory, { recursive: true });
+  const before = listing(fx.base);
+  fs.chmodSync(directory, 0o000);
+  try {
+    const result = await fx.run({});
+    assert.equal(result.code, 2, `expected a refusal, got ${result.code}: ${result.stdout} ${result.stderr}`);
+    const lines = result.stderr.trimEnd().split('\n');
+    assert.equal(lines.length, 1, `one line on standard error: ${JSON.stringify(result.stderr)}`);
+    assert.match(lines[0], pattern);
+    assert.match(lastLine(result.stdout), /^ACODER LAUNCH (-|[A-Za-z0-9._-]+) refused -$/);
+    assert.ok(!result.stderr.includes(fx.key) && !result.stdout.includes(fx.key), 'the key is in no message');
+    assert.equal((fs.lstatSync(directory).mode & 0o7777), 0o000, 'the run did not change the mode of the directory');
+  } finally { fs.chmodSync(directory, 0o755); }
+  assert.deepEqual(listing(fx.base), before, 'a refusal has no effect');
+};
+tUnlessRoot('dod4-own-mailbox: an orchestrator directory the search cannot read is a refusal, not an internal error', () => withFixture({}, async fx => {
+  await expectRefusalWhileUnreadable(fx, path.join(fx.mailbox, 'locked', 'orchestrator'), /^refused: cannot read locked\/orchestrator while searching for another mailbox$/);
+}));
+tUnlessRoot('dod4-own-mailbox: an orchestrator directory the search cannot read inside an export outside the mailbox is a refusal', () => withFixture({}, async fx => {
+  const dir = fx.export('code').dir;
+  fs.chmodSync(dir, 0o755);
+  await expectRefusalWhileUnreadable(fx, path.join(dir, 'orchestrator'), /^refused: cannot read export-code\/orchestrator while searching for another mailbox$/);
+}));
+tUnlessRoot('dod4-own-mailbox: an orchestrator directory the search cannot read inside an export inside the mailbox is a refusal', () => withFixture({ exports: [{ role: 'code', place: 'inside' }] }, async fx => {
+  const dir = fx.export('code').dir;
+  fs.chmodSync(dir, 0o755);
+  await expectRefusalWhileUnreadable(fx, path.join(dir, 'orchestrator'), /^refused: cannot read .*orchestrator while searching for another mailbox$/);
 }));
