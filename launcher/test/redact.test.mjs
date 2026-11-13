@@ -11,7 +11,10 @@ import { embedBase64, expectedForms, syntheticKey } from './helpers/key-forms.mj
 import { recordValues } from './helpers/record-values.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
-const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, async (...args) => {
+  // A failure that is not an assertion (a TypeError from a broken module) is reported as an assertion failure.
+  try { return await fn(...args); } catch (error) { if (error?.code === 'ERR_ASSERTION') throw error; assert.fail(`threw: ${String(error?.message ?? error)}`); }
+});
 
 const IS_ROOT = typeof process.getuid === 'function' && process.getuid() === 0;
 const FORM_NAMES = ['raw', 'base64-0', 'base64-1', 'base64-2', 'base64url-0', 'base64url-1', 'base64url-2', 'hex-lower', 'hex-upper', 'percent-upper', 'percent-lower'];
@@ -43,6 +46,14 @@ function everything(root) {
 const holdsAnyForm = (text, key) => Object.values(expectedForms(key)).some(form => text.includes(form));
 const scan = (fx, over = {}) => must(() => scanTree({ key: fx.key, scratch: fx.writable.scratch, files: [fx.writable.reportMd, fx.writable.reportJson], ...over }));
 const makeScratch = fx => { fs.mkdirSync(fx.writable.scratch); return fx.writable.scratch; };
+// Every descriptor the scan opens is closed on every path: the tracker holds the descriptors that are still open.
+function tracker() {
+  const open = new Set();
+  return {
+    open,
+    ops: { openSync: (file, flags, mode) => { const fd = fs.openSync(file, flags, mode); open.add(fd); return fd; }, closeSync: fd => { open.delete(fd); return fs.closeSync(fd); } },
+  };
+}
 
 t('dod8-redact: the key forms are exactly those of A8.6 (raw, base64 and base64url in three alignments, hex in two cases, percent-encoded)', () => {
   const key = syntheticKey();
@@ -57,6 +68,10 @@ t('dod8-redact: the key forms are exactly those of A8.6 (raw, base64 and base64u
   }
   assert.ok(thrownOf(() => createRedactor('')) !== null, 'an empty key cannot be redacted');
   assert.ok(thrownOf(() => createRedactor('short')) !== null, 'a key shorter than 16 characters is not a key');
+  assert.equal(thrownOf(() => createRedactor('a'.repeat(16))), null, 'a key of 16 characters is a key');
+  assert.ok(thrownOf(() => createRedactor('a'.repeat(15))) !== null, '15 characters are not');
+  assert.ok(thrownOf(() => createRedactor(7)) !== null && thrownOf(() => createRedactor(undefined)) !== null);
+  assert.ok(thrownOf(() => createRedactor(Buffer.from('a'.repeat(20)))) !== null, 'a key is text');
 });
 
 t('dod8-redact: every key form in a text is replaced, in a string and in a stream, and other text is unchanged', () => {
@@ -269,10 +284,10 @@ t('spec01-scan-rename: a file with two names is replaced under each name by a ne
   assert.equal(fs.readFileSync(twin, 'utf8'), `twin ${fx.key}`, 'the other name of the inode keeps its bytes');
   assert.equal(fs.readFileSync(path.join(scratch, 'twin-link.txt'), 'utf8'), 'twin [REDACTED]');
   // The mode of the replaced file is the mode of the original.
-  fs.writeFileSync(path.join(scratch, 'mode.txt'), `m ${fx.key}`, { mode: 0o640 });
-  fs.chmodSync(path.join(scratch, 'mode.txt'), 0o640);
+  fs.writeFileSync(path.join(scratch, 'mode.txt'), `m ${fx.key}`);
+  fs.chmodSync(path.join(scratch, 'mode.txt'), 0o664);
   scan(fx);
-  assert.equal(fs.statSync(path.join(scratch, 'mode.txt')).mode & 0o777, 0o640);
+  assert.equal(fs.statSync(path.join(scratch, 'mode.txt')).mode & 0o777, 0o664, 'the mode of the original, whatever the umask');
 }));
 
 t('spec01-scan-rename: the replacement is made by exclusive creation of a new file and a rename, never by writing the existing inode', () => withFixture({ noExport: true }, async fx => {
@@ -280,11 +295,16 @@ t('spec01-scan-rename: the replacement is made by exclusive creation of a new fi
   const target = path.join(scratch, 'f.txt');
   fs.writeFileSync(target, `x ${fx.key} y`);
   const calls = [];
+  const tracked = tracker();
   const ops = {
-    openSync: (file, flags, mode) => { calls.push({ op: 'open', file, flags, mode }); return fs.openSync(file, flags, mode); },
+    openSync: (file, flags, mode) => { calls.push({ op: 'open', file, flags, mode }); return tracked.ops.openSync(file, flags, mode); },
+    closeSync: tracked.ops.closeSync,
+    fsyncSync: fd => { calls.push({ op: 'fsync' }); return fs.fsyncSync(fd); },
     renameSync: (from, to) => { calls.push({ op: 'rename', from, to }); return fs.renameSync(from, to); },
   };
   const result = scan(fx, { ops });
+  assert.equal(tracked.open.size, 0, 'every descriptor is closed');
+  assert.deepEqual(calls.filter(call => call.op === 'fsync' || call.op === 'rename').map(call => call.op), ['fsync', 'rename'], 'the new file is flushed before it replaces the name');
   assert.equal(result.secret_scan.status, 'found');
   const creates = calls.filter(call => call.op === 'open' && (call.flags & fs.constants.O_CREAT) !== 0);
   assert.equal(creates.length, 1);
@@ -503,4 +523,117 @@ t('dod8-redact: the scan covers the two reports and the log as files, scratch en
   const linked = scan(fx, { files: [fx.writable.reportMd] });
   assert.equal(linked.secret_scan.status, 'incomplete', 'a report that is a link cannot be scanned');
   assert.equal(fs.readFileSync(outside, 'utf8'), `o ${fx.key}`);
+}));
+
+t('r5-readback: the bounds are exact: an elapsed time, a byte total and a report size equal to the bound are complete, one more is not', () => withFixture({ noExport: true }, async fx => {
+  const scratch = makeScratch(fx);
+  const clockAt = elapsed => { let calls = 0; return () => (calls++ === 0 ? 0 : elapsed); };
+  fs.writeFileSync(path.join(scratch, 'a.txt'), 'a'.repeat(1500));
+  assert.equal(scan(fx, { now: clockAt(60000) }).secret_scan.status, 'clean', 'exactly 60 s');
+  assert.equal(scan(fx, { now: clockAt(60001) }).secret_scan.status, 'incomplete', 'more than 60 s');
+  assert.equal(scan(fx, { bounds: { ...BOUNDS, maxSeconds: 5 }, now: clockAt(5000) }).secret_scan.status, 'clean', 'the bound is a parameter');
+  assert.equal(scan(fx, { bounds: { ...BOUNDS, maxBytes: 1500 } }).secret_scan.status, 'clean', 'exactly the byte bound');
+  assert.equal(scan(fx, { bounds: { ...BOUNDS, maxBytes: 1499 } }).secret_scan.status, 'incomplete', 'one byte more');
+  fs.writeFileSync(fx.writable.reportJson, 'j'.repeat(100));
+  assert.equal(scan(fx, { bounds: { ...BOUNDS, reportMaxBytes: 100 } }).secret_scan.status, 'clean', 'a report of exactly the bound');
+  assert.equal(scan(fx, { bounds: { ...BOUNDS, reportMaxBytes: 99 } }).secret_scan.status, 'incomplete', 'one byte over');
+  fs.writeFileSync(fx.writable.reportMd, 'm'.repeat(5000));
+  assert.equal(scan(fx, { bounds: { ...BOUNDS, reportMaxBytes: 99 }, files: [fx.writable.reportMd] }).secret_scan.status, 'clean', 'the report bound is for the JSON report, not for the Markdown report');
+  assert.equal(scan(fx).secret_scan.max_seconds, 60);
+  const reported = scan(fx, { bounds: { maxSeconds: 7, maxDepth: 3, maxEntries: 9, maxBytes: 99999, reportMaxBytes: 1234 } }).secret_scan;
+  assert.deepEqual([reported.max_seconds, reported.max_depth, reported.max_entries, reported.max_bytes, reported.report_max_bytes], [7, 3, 9, 99999, 1234], 'the bounds are recorded');
+}));
+
+t('r5-readback: entries are scanned in name order, whatever order the file system lists them in; an unreadable entry does not stop the others', () => withFixture({ noExport: true }, async fx => {
+  const scratch = makeScratch(fx);
+  fs.writeFileSync(path.join(scratch, 'a1.txt'), `hit ${fx.key}`);
+  fs.writeFileSync(path.join(scratch, 'b1.txt'), 'clean');
+  fs.writeFileSync(path.join(scratch, 'c1.txt'), 'third');
+  const reversed = { readdirSync: directory => fs.readdirSync(directory).sort().reverse() };
+  const result = scan(fx, { ops: reversed, bounds: { ...BOUNDS, maxEntries: 1 } });
+  assert.equal(result.found, true, 'a1.txt is the first entry in name order');
+  assert.deepEqual(result.conditions, ['secret_found', 'secret_scan_incomplete']);
+  assert.equal(result.secret_scan.entries_seen, 2, 'the scan stops at the first entry beyond the bound');
+  // A read error on one file leaves the scan going: the other file is still found and redacted.
+  fs.writeFileSync(path.join(scratch, 'a0.txt'), 'broken');
+  const failOne = { readSync: (fd, ...rest) => { if (fs.fstatSync(fd).size === 6) throw Object.assign(new Error('EIO'), { code: 'EIO' }); return fs.readSync(fd, ...rest); } };
+  fs.writeFileSync(path.join(scratch, 'c1.txt'), `again ${fx.key}`);
+  const second = scan(fx, { ops: failOne });
+  assert.equal(second.secret_scan.status, 'incomplete');
+  assert.deepEqual(second.conditions, ['secret_found', 'secret_scan_incomplete']);
+  assert.equal(fs.readFileSync(path.join(scratch, 'c1.txt'), 'utf8'), 'again [REDACTED]');
+}));
+
+t('scan-content-unwritable: every descriptor is closed on every failure path of the replacement', () => withFixture({ noExport: true }, async fx => {
+  const scratch = makeScratch(fx);
+  fs.writeFileSync(path.join(scratch, 'f.txt'), `data ${fx.key}`);
+  for (const [label, failing] of [
+    ['write failure', { writeSync: () => { throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }); } }],
+    ['rename failure', { renameSync: () => { throw Object.assign(new Error('EXDEV'), { code: 'EXDEV' }); } }],
+    ['fsync failure', { fsyncSync: () => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); } }],
+    ['mode failure', { fchmodSync: () => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); } }],
+    ['read failure', { readSync: () => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); } }],
+  ]) {
+    const tracked = tracker();
+    const result = scan(fx, { ops: { ...tracked.ops, ...failing } });
+    assert.equal(result.secret_scan.status, 'incomplete', label);
+    assert.equal(tracked.open.size, 0, `${label}: no descriptor is left open`);
+    assert.deepEqual(fs.readdirSync(scratch), ['f.txt'], `${label}: no temporary file is left`);
+  }
+  const tracked = tracker();
+  assert.equal(scan(fx, { ops: tracked.ops }).secret_scan.status, 'found');
+  assert.equal(tracked.open.size, 0, 'no descriptor is left open after a success either');
+}));
+
+t('dod8-redact: a key form that straddles the read boundary of the scan is found at every split position', () => withFixture({ noExport: true }, async fx => {
+  const scratch = makeScratch(fx);
+  const oracle = expectedForms(fx.key);
+  const READ = 65536;
+  for (const name of ['raw', 'hex-lower', 'percent-upper', 'base64-1']) {
+    const form = oracle[name];
+    for (let before = 1; before < form.length; before += 1) {
+      const file = path.join(scratch, 'big.bin');
+      fs.writeFileSync(file, `${'a'.repeat(READ - before)}${form}${'b'.repeat(40)}`);
+      const result = scan(fx);
+      assert.equal(result.secret_scan.status, 'found', `${name}: ${before} bytes before the boundary`);
+      assert.equal(fs.readFileSync(file, 'utf8'), `${'a'.repeat(READ - before)}[REDACTED]${'b'.repeat(40)}`, `${name} at ${before}`);
+    }
+  }
+}), 60000);
+
+t('spec03-metadata: a link whose target holds the key alone is secret_found; an unreadable link and a file that changes between the read and the replacement make the scan incomplete', () => withFixture({ noExport: true }, async fx => {
+  const scratch = makeScratch(fx);
+  fs.symlinkSync(`target-${fx.key}`, path.join(scratch, 'only-link'));
+  const found = scan(fx);
+  assert.equal(found.secret_scan.status, 'found');
+  assert.deepEqual(found.conditions, ['secret_found']);
+  assert.equal(found.secret_scan.removed_links, 1);
+  fs.symlinkSync('harmless', path.join(scratch, 'plain-link'));
+  const unreadable = scan(fx, { ops: { readlinkSync: () => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); } } });
+  assert.equal(unreadable.secret_scan.status, 'incomplete');
+  assert.deepEqual(unreadable.conditions, ['secret_scan_incomplete']);
+  fs.writeFileSync(path.join(scratch, 'f.txt'), `x ${fx.key}`);
+  let calls = 0;
+  const swapped = scan(fx, { ops: { fstatSync: fd => { calls += 1; const info = fs.fstatSync(fd); return calls === 2 ? { ...info, ino: info.ino + 1, isFile: () => true } : info; } } });
+  assert.equal(swapped.secret_scan.status, 'incomplete', 'the identity of the file is checked again before the replacement');
+  assert.deepEqual(swapped.conditions, ['secret_found', 'secret_scan_incomplete']);
+  assert.equal(fs.readFileSync(path.join(scratch, 'f.txt'), 'utf8'), `x ${fx.key}`, 'nothing was replaced');
+  assert.equal(swapped.secret_scan.unresolved_redactions.length, 1);
+  // The redacted-name numbers have the form of A8.6.
+  fs.writeFileSync(path.join(scratch, `n-${fx.key}`), 'x');
+  scan(fx);
+  assert.ok(fs.readdirSync(scratch).some(name => /^redacted-name-1$/.test(name)));
+}));
+
+t('r5-readback: after a bound stopped the scan no other directory is entered', () => withFixture({ noExport: true }, async fx => {
+  const scratch = makeScratch(fx);
+  fs.mkdirSync(path.join(scratch, 'd1'));
+  fs.mkdirSync(path.join(scratch, 'd2'));
+  for (const name of ['f1', 'f2']) fs.writeFileSync(path.join(scratch, 'd1', name), 'x');
+  fs.writeFileSync(path.join(scratch, 'd2', 'g1'), `hit ${fx.key}`);
+  const result = scan(fx, { bounds: { ...BOUNDS, maxEntries: 2 } });
+  assert.equal(result.secret_scan.status, 'incomplete');
+  assert.equal(result.secret_scan.entries_seen, 3, 'd1, d1/f1 and the entry that crossed the bound');
+  assert.equal(result.found, false, 'd2 is not entered after the stop');
+  assert.equal(fs.readFileSync(path.join(scratch, 'd2', 'g1'), 'utf8'), `hit ${fx.key}`);
 }));

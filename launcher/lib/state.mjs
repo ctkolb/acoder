@@ -71,7 +71,7 @@ const isGood = request => request.complete === true && Number.isInteger(request.
 export function agentConditions({ agent, egress_log: log, reports }) {
   const found = [];
   if (agent !== null) {
-    if (agent.code === 0 && (agent.signal === null || agent.signal === undefined)) { if (agent.outcome === 'error') found.push('agent_failed'); }
+    if (agent.code === 0 && (agent.signal === null || agent.signal === undefined)) { if (agent.outcome !== 'success') found.push('agent_failed'); }
     else found.push('agent_exit_nonzero');
   }
   const calls = log.filter(request => request.decision === 'forwarded');

@@ -8,7 +8,10 @@ import { DISK_BOUNDS, DISK_POLL_MS, createDiskController } from '../lib/budget.m
 import { must, mustAsync, thrownOf, withFixture } from './helpers/fixtures.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
-const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, async (...args) => {
+  // A failure that is not an assertion (a TypeError from a broken module) is reported as an assertion failure.
+  try { return await fn(...args); } catch (error) { if (error?.code === 'ERR_ASSERTION') throw error; assert.fail(`threw: ${String(error?.message ?? error)}`); }
+});
 
 const ROOT = '/s/scratch';
 const FILES = ['/s/report.md', '/s/report.json', '/s/run.log'];
@@ -302,6 +305,18 @@ t('dod5-disk: the stop signal is given once, with the disk kind, and the control
   quiet.controller.stop();
   assert.deepEqual(await quiet.controller.run(), { stopped: false, stop: null });
   assert.deepEqual(idle.starts, []);
+  // stop() called during a sample ends the run after that sample, without a sleep.
+  const during = world(baseTree());
+  let controllerRef;
+  let sleeps = 0;
+  const watched = { ...during.ops, lstat: async target => { controllerRef.stop(); return during.ops.lstat(target); } };
+  controllerRef = must(() => createDiskController({ scratch: ROOT, files: FILES, limitBytes: 1000, ops: watched, now: () => during.now, sleep: async () => { sleeps += 1; }, onStop: () => {} }));
+  assert.deepEqual(await controllerRef.run(), { stopped: false, stop: null });
+  assert.equal(sleeps, 0, 'no sleep after stop()');
+  assert.equal(during.starts.length, 1);
+  // A programming error is an error, not a disk stop.
+  const broken = must(() => createDiskController({ scratch: ROOT, files: FILES, limitBytes: 1000, ops: { lstat: async () => ({}), readdir: async () => ['x'] }, onStop: () => {} }));
+  await assert.rejects(() => broken.sample(), TypeError);
   // A failing onStop does not hide the stop: the result still reports it.
   const loud = world(baseTree({ [`${ROOT}/a.bin`]: { file: 5000 } }));
   const failing = make(loud, { onStop: () => { throw new Error('handler failed'); } });

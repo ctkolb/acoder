@@ -6,7 +6,10 @@ import { must, thrownOf } from './helpers/fixtures.mjs';
 import { syntheticKey } from './helpers/key-forms.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
-const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, async (...args) => {
+  // A failure that is not an assertion (a TypeError from a broken module) is reported as an assertion failure.
+  try { return await fn(...args); } catch (error) { if (error?.code === 'ERR_ASSERTION') throw error; assert.fail(`threw: ${String(error?.message ?? error)}`); }
+});
 
 // The functions under test are called through must(): a failure is an assertion failure, never a bare error.
 const hostsFile = (...args) => must(() => hostsRaw(...args));
@@ -59,6 +62,7 @@ t('dod11-podman-args: the complete argument lists for Docker: both containers, t
   assert.equal(p.run_id, RUN);
   assert.deepEqual(p.names, { agent: `acoder-agent-${RUN}`, egress: `acoder-sidecar-${RUN}`, volume: `acoder-egress-${RUN}`, network: `acoder-ext-${RUN}` });
   assert.deepEqual(p.agent.create, agentArgs());
+  assert.ok(plan({ scratchSize: '512m' }).agent.create.includes('/work:rw,exec,size=512m,mode=1777'), '--scratch-size is the size of /work');
   assert.deepEqual(p.egress.create, sidecarArgs());
   assert.deepEqual(p.volume.create, VOLUME);
   assert.deepEqual(p.network.create, NETWORK);
@@ -255,6 +259,15 @@ t('dod11-podman-args: the plan is a pure function of validated inputs, and refus
     refused({ exports: [{ role: 'code', dir: `/m/e${comma}xp`, insideMailbox: false }] });
     refused({ staging: { ...input().staging, dir: `/s/st${comma}g` } });
   }
+  refused({ launcherVersion: '' });
+  refused({ launcherVersion: 7 });
+  refused({ probeInput: 'text' });
+  refused({ probeInput: [] });
+  refused({ probeInput: null });
+  refused({ imageEnvNames: ['a b'] });
+  refused({ imageEnvNames: ['A=B'] });
+  refused({ imageEnvNames: ['ACODER_TAG'] });
+  refused({ imageEnvNames: ['NODE_EXTRA_CA_CERTS'] });
   refused({ runId: 'bad id' });
   refused({ runId: '../x' });
   refused({ runId: '' });
@@ -328,9 +341,10 @@ t('spec07-env: a tag, a bare name, a digest that matches neither the id nor a re
   assert.equal(refusalOf(inspectOf({ Config: { Env: ['PATH=/x'], Volumes: {} } })), null, 'an empty volume list declares none');
   // The shape of the answer.
   for (const bad of [null, [], [inspectOf(), inspectOf()], 'text', 7, {}, { Id: 7 }, inspectOf({ Id: 'no-digest' }), inspectOf({ Config: null }), inspectOf({ Config: 'x' })]) {
-    assert.match(refusalOf(bad) ?? 'no refusal', /inspect|image|answer/i, JSON.stringify(bad)?.slice(0, 50));
+    assert.match(refusalOf(bad) ?? 'no refusal', /answer of image inspect/, JSON.stringify(bad)?.slice(0, 50));
   }
   // Every message is one line and names no value, whatever the input.
   for (const text of [refusalOf(inspectOf(), { image: 'name:tag' }), message]) assert.ok(!/\n/.test(text));
-  assert.notEqual(thrownOf(() => checkImageConfig(inspectOf(), { image: IMAGE })), null, 'allowImageEnv is a list');
+  assert.match(thrownOf(() => checkImageConfig(inspectOf(), { image: IMAGE })) ?? 'no error', /is a list/, 'allowImageEnv is a list');
+  assert.match(refusalOf(inspectOf({ Config: { Env: 'PATH=/x', Volumes: null } })) ?? 'no refusal', /malformed environment list/);
 });

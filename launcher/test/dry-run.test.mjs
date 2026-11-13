@@ -5,7 +5,10 @@ import { listing, withFixture, parseJson } from './helpers/fixtures.mjs';
 import { PLACEHOLDER_KEY } from '../lib/plan.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
-const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, async (...args) => {
+  // A failure that is not an assertion (a TypeError from a broken module) is reported as an assertion failure.
+  try { return await fn(...args); } catch (error) { if (error?.code === 'ERR_ASSERTION') throw error; assert.fail(`threw: ${String(error?.message ?? error)}`); }
+});
 
 // S2-AC18 (skeleton): --dry-run performs states V and S, prints the plan as JSON, exits 0, removes the staging directory,
 // creates nothing in the mailbox and prints no key value. The image and runtime checks are not_run until stage S4.
@@ -109,4 +112,22 @@ t('dod11-podman-args: --runtime podman gives the Podman variant in the dry-run p
   assert.equal(stubRun.code, 0, stubRun.stderr);
   assert.equal(JSON.parse(parseJson(stubRun.stdout).launch.payload_files.agent['agent-command.json']).argv[0], 'node', 'the stub adapter builds the command');
   assert.ok(!stubRun.stdout.includes(fx.key));
+}));
+
+t('dry-run: the plan carries the flags (--scratch-size, the limits), a fresh run id and event prefix per run, and the probe input of A8.3', () => withFixture({}, async fx => {
+  const first = parseJson((await fx.run({ add: [['--scratch-size', '512m']] })).stdout);
+  const second = parseJson((await fx.run()).stdout);
+  assert.ok(first.launch.agent.create.includes('/work:rw,exec,size=512m,mode=1777'), '--scratch-size is the size of /work');
+  assert.ok(second.launch.agent.create.includes('/work:rw,exec,size=2g,mode=1777'));
+  assert.notEqual(first.launch.run_id, second.launch.run_id, 'a run id per run');
+  const prefix = launch => values(launch.agent.create, '--env').find(entry => entry.startsWith('ACODER_EVENT_PREFIX=')).slice('ACODER_EVENT_PREFIX='.length);
+  assert.match(prefix(first.launch), /^[0-9a-f]{32}$/);
+  assert.notEqual(prefix(first.launch), prefix(second.launch), 'an event prefix per run');
+  assert.deepEqual(JSON.parse(first.launch.payload_files.agent['run.json']).limits, first.limits);
+  assert.equal(JSON.parse(first.launch.payload_files.egress['egress.json']).limits.calls, first.limits.calls);
+  const probe = JSON.parse(values(first.launch.agent.create, '--env').find(entry => entry.startsWith('ACODER_PROBE_INPUT=')).slice('ACODER_PROBE_INPUT='.length));
+  assert.deepEqual(probe.allowed_names, ['models.example.org']);
+  assert.deepEqual(probe.env_names, first.launch.agent.env_names);
+  assert.equal(probe.hashes.ticket_sha256, fx.ticketSha);
+  assert.equal(probe.hashes.skill_sha256, first.snapshot.skill_sha256);
 }));

@@ -5,7 +5,10 @@ import nodeTest from 'node:test';
 import { LAUNCHER, must } from './helpers/fixtures.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
-const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, async (...args) => {
+  // A failure that is not an assertion (a TypeError from a broken module) is reported as an assertion failure.
+  try { return await fn(...args); } catch (error) { if (error?.code === 'ERR_ASSERTION') throw error; assert.fail(`threw: ${String(error?.message ?? error)}`); }
+});
 
 const ROOT = path.dirname(LAUNCHER.replace(/\/$/, ''));
 const CONTAINERFILE = path.join(LAUNCHER, 'image', 'Containerfile');

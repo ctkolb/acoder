@@ -10,7 +10,10 @@ import { BOUNDARIES, runLifecycle } from './helpers/fake-lifecycle.mjs';
 import { attempt, lastLine, listing, must, runMain, thrownOf, withFixture } from './helpers/fixtures.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
-const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, async (...args) => {
+  // A failure that is not an assertion (a TypeError from a broken module) is reported as an assertion failure.
+  try { return await fn(...args); } catch (error) { if (error?.code === 'ERR_ASSERTION') throw error; assert.fail(`threw: ${String(error?.message ?? error)}`); }
+});
 
 // The order of A6.5, written out here once more (the tests do not take it from the module).
 const ORDER = [
@@ -109,7 +112,7 @@ t('spec09-state: the table itself (what each state removes, what it leaves, the 
   assert.equal(failure('R', { startedFileWritten: true, interrupted: true }).outcome, 'error');
   assert.equal(failure('V', { interrupted: true }).outcome, 'refused');
   assert.equal(failure('S', { interrupted: true }).error_detail, null);
-  for (const state of ['A', 'T', 'C', 'F', 'X', undefined]) assert.notEqual(thrownOf(() => failureOutcome(state, {})), null, `${state} is not an effect boundary`);
+  for (const state of ['A', 'T', 'C', 'F', 'X', undefined, 'constructor', '__proto__', 'toString', 'hasOwnProperty']) assert.notEqual(thrownOf(() => failureOutcome(state, {})), null, `${state} is not an effect boundary`);
 });
 
 t('spec09-state: two attempts in the same second get different record names, and the first does not block the second', () => withFixture({ noExport: true }, async fx => {
@@ -188,6 +191,7 @@ t('spec16-outcome: the done rule of A6.5 over adapter outcome, exit code, the la
   assert.equal(detail({ agent: { code: null, signal: 'SIGKILL', outcome: 'error' } }), 'agent_exit_nonzero');
   assert.equal(detail({ agent: { code: 0, signal: 'SIGTERM', outcome: 'success' } }), 'agent_exit_nonzero', 'a signal is never done');
   assert.equal(detail({ agent: { code: null, signal: null, outcome: null } }), 'agent_exit_nonzero', 'an agent that has no exit');
+  assert.equal(detail({ agent: { code: 0, signal: null, outcome: null } }), 'agent_failed', 'done needs the adapter outcome success');
   assert.equal(evaluate({ agent: null }).error_detail, null, 'no agent facts at all (the agent never ran) add no agent condition');
   // The forwarded requests: none; the last one (latest closed, tie: greatest seq) must be complete with 2xx.
   assert.equal(detail({ egress_log: [] }), 'no_model_request');
@@ -196,7 +200,7 @@ t('spec16-outcome: the done rule of A6.5 over adapter outcome, exit code, the la
   assert.equal(detail({ egress_log: [forwarded(1, 5, 500)] }), 'last_model_request_failed');
   assert.equal(detail({ egress_log: [forwarded(1, 5, 200, false)] }), 'last_model_request_failed');
   assert.equal(detail({ egress_log: [forwarded(1, 5, null, true)] }), 'last_model_request_failed');
-  for (const status of [199, 300, 301, 404, 429, 599]) assert.equal(detail({ egress_log: [forwarded(1, 5, status)] }), 'last_model_request_failed', String(status));
+  for (const status of [199, 300, 301, 404, 429, 599, '200', null, undefined, 200.5]) assert.equal(detail({ egress_log: [forwarded(1, 5, status)] }), 'last_model_request_failed', String(status));
   for (const status of [200, 201, 204, 299]) assert.equal(detail({ egress_log: [forwarded(1, 5, status)] }), null, String(status));
   assert.equal(detail({ egress_log: [forwarded(1, 3, 500), forwarded(2, 9, 200)] }), null, 'an early failure does not matter');
   assert.equal(detail({ egress_log: [forwarded(1, 9, 500), forwarded(2, 3, 200)] }), 'last_model_request_failed', 'the latest closed counts, not the last in the list');
@@ -221,7 +225,7 @@ t('spec16-outcome: the done rule of A6.5 over adapter outcome, exit code, the la
   assert.equal(detail({ scan_status: 'not_run' }), 'secret_scan_incomplete');
   assert.deepEqual(evaluate({ scan_status: 'found', flags: ['secret_found'] }).conditions, ['secret_found'], 'the scan result and its condition are one condition');
   assert.equal(evaluate({ scan_status: 'clean', flags: ['secret_found'] }).error_detail, 'secret_found', 'a key reflected by the endpoint is secret_found with a clean scan');
-  assert.notEqual(thrownOf(() => evaluateRun({ flags: [], budgetKinds: [], tokensLowerBound: false, scan_status: 'dirty', ...GOOD })), null);
+  assert.match(thrownOf(() => evaluateRun({ flags: [], budgetKinds: [], tokensLowerBound: false, scan_status: 'dirty', ...GOOD })) ?? 'no error', /unknown scan status/);
   // A limit event is never done; an independent failure of the same run keeps its precedence.
   assert.equal(evaluate({ budgetKinds: ['calls'] }).exit_reason, 'budget');
   const both = evaluate({ budgetKinds: ['wall_clock'], agent: { code: null, signal: 'SIGKILL', outcome: 'error' }, egress_log: [] });

@@ -11,7 +11,10 @@ import { LAUNCHER, must, runMain, thrownOf, withFixture, parseJson } from './hel
 import * as stub from './helpers/stub-adapter.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
-const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, async (...args) => {
+  // A failure that is not an assertion (a TypeError from a broken module) is reported as an assertion failure.
+  try { return await fn(...args); } catch (error) { if (error?.code === 'ERR_ASSERTION') throw error; assert.fail(`threw: ${String(error?.message ?? error)}`); }
+});
 
 const PLACEHOLDER = 'acoder-placeholder-not-a-key';
 const INPUT = { model: 'gpt-6-luna', effort: 'high', provider: { id: 'openai', baseUrl: 'http://models.example.org:8080/v1', placeholderKey: PLACEHOLDER }, firstMessage: 'This is an acoder container launch. TICKET t at /m/S2/ticket-t.md', workdir: '/m/S2/scratch-t' };
@@ -129,6 +132,9 @@ t('dod1-adapter: the parser and the outcome for no events, steps only, an error 
   const snapshot = parser.result();
   parser.push(STEP);
   assert.equal(snapshot.advisory.calls, 1, 'a result is a copy');
+  assert.equal(snapshot.advisory.tokens.input, 10, 'the token tally of a result is a copy too');
+  assert.equal(feed([JSON.stringify({ type: 'step_finish', part: { tokens: { input: -1, output: 'x' } } })]).advisory.tokens, null, 'a step without a valid count creates no tally');
+  assert.equal(feed([JSON.stringify({ type: 'step_finish', part: { tokens: 5 } }), JSON.stringify({ type: 'step_finish', tokens: 'x' })]).advisory.tokens, null, 'tokens that are not an object are ignored');
   assert.equal(parser.result().advisory.calls, 2);
 });
 
@@ -250,6 +256,7 @@ t('dod14-stub: the profile reads usage and model from a JSON answer (Responses a
   assert.deepEqual(extract('application/json', [JSON.stringify(responses)]), { usage: U, model: 'gpt-6-luna-2026' });
   const chat = { model: 'gpt-x', usage: { prompt_tokens: 12, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 5 }, completion_tokens_details: { reasoning_tokens: 3 } } };
   assert.deepEqual(extract('application/json; charset=utf-8', [JSON.stringify(chat)]), { usage: U, model: 'gpt-x' });
+  assert.deepEqual(extract('Application/JSON', [JSON.stringify(chat)]), { usage: U, model: 'gpt-x' }, 'a content type is case insensitive');
   assert.deepEqual(extract('application/json', [JSON.stringify({ model: 'm', usage: { input_tokens: 1, output_tokens: 2 } })]).usage, { input: 1, output: 2, reasoning: 0, cached_input: 0 }, 'details default to 0');
   assert.deepEqual(extract('application/json', [JSON.stringify({ usage: { input_tokens: 0, output_tokens: 0 } })]), { usage: { input: 0, output: 0, reasoning: 0, cached_input: 0 }, model: null });
   assert.deepEqual(extract('application/json', ['{"model":"a",', '"usage":{"input_tokens":1,', '"output_tokens":2}}']), { usage: { input: 1, output: 2, reasoning: 0, cached_input: 0 }, model: 'a' }, 'a body in several chunks');
@@ -267,6 +274,11 @@ t('dod14-stub: the profile reads usage and model from a JSON answer (Responses a
   // A body over 8 MiB is not kept: no usage and no model.
   const big = `{"model":"m","usage":{"input_tokens":1,"output_tokens":2},"pad":"${'x'.repeat(8 * 1024 * 1024)}"}`;
   assert.deepEqual(extract('application/json', [big]), { usage: null, model: null });
+  const head = '{"model":"m","usage":{"input_tokens":1,"output_tokens":2},"pad":"';
+  const exactly = `${head}${'x'.repeat(8 * 1024 * 1024 - head.length - 2)}"}`;
+  assert.equal(Buffer.byteLength(exactly), 8 * 1024 * 1024);
+  assert.equal(extract('application/json', [exactly]).usage?.input, 1, 'a body of exactly 8 MiB is read');
+  assert.deepEqual(extract('application/json', [`${exactly} `]), { usage: null, model: null }, 'one byte more is dropped');
   const nearly = `{"model":"m","usage":{"input_tokens":1,"output_tokens":2},"pad":"${'x'.repeat(8 * 1024 * 1024 - 100)}"}`;
   assert.equal(extract('application/json', [nearly]).usage?.input, 1, 'a body up to 8 MiB is read');
 });
@@ -303,10 +315,20 @@ t('dod14-stub: the profile reads usage from an event stream: response.completed,
     assert.deepEqual(extract('text/event-stream', [bytes.subarray(0, cut), bytes.subarray(cut)]), { usage: U, model: 'mé' }, `cut at ${cut}`);
   }
   assert.deepEqual(extract('text/event-stream', [...bytes].map(byte => Buffer.from([byte]))), { usage: U, model: 'mé' }, 'one byte at a time');
+  assert.deepEqual(extract('TEXT/Event-Stream', [chat]).usage, U, 'a content type is case insensitive');
+  assert.deepEqual(extract('text/event-stream', [`${chat.replace('data: [DONE]\n\n', '')}data: [DONE]\r\n\r\n`.replaceAll('\n', '\r\n').replaceAll('\r\r', '\r')]).usage, U, 'a [DONE] line with CRLF is the marker');
+  assert.deepEqual(extract('text/event-stream', [sse([{ model: 'a', usage: { prompt_tokens: 1, completion_tokens: 1 } }, { model: 'z', usage: null }])]), { usage: { input: 1, output: 1, reasoning: 0, cached_input: 0 }, model: 'z' }, 'a later null usage does not erase an earlier one');
+  for (const bad of ['5', '[1]', 'null', '"x"', 'true']) assert.equal(extract('text/event-stream', [sse([{ model: 'a', usage: { prompt_tokens: 1, completion_tokens: 1 } }, bad])]).usage, null, `an event that is not an object (${bad}) ends the request with usage null`);
+  // An event of exactly 1 MiB is read; one byte more is not.
+  const frame = pad => `data: {"model":"fits","usage":{"prompt_tokens":1,"completion_tokens":1},"pad":"${'x'.repeat(pad)}"}\n\n`;
+  const fixed = Buffer.byteLength(frame(0)) - 2 - 'data: '.length;
+  assert.equal(extract('text/event-stream', [frame(1024 * 1024 - fixed)]).usage?.input, 1, 'a payload of exactly 1 MiB');
+  assert.equal(extract('text/event-stream', [frame(1024 * 1024 - fixed + 1)]).usage, null, 'a payload of 1 MiB and one byte');
   // An event over 1 MiB ends the request with usage null; the extractor stays usable afterwards.
   const oversized = `data: {"model":"big","pad":"${'x'.repeat(1024 * 1024)}"}\n\n${sse([{ model: 'after', usage: { prompt_tokens: 1, completion_tokens: 1 } }])}`;
   assert.deepEqual(extract('text/event-stream', [oversized]), { usage: null, model: 'after' });
-  assert.deepEqual(extract('text/event-stream', [`data: {"model":"big","pad":"${'x'.repeat(1024 * 1024)}`, `${'y'.repeat(1000)}"}\n\n`, sse([{ model: 'after' }])]), { usage: null, model: 'after' }, 'an oversized event across chunks');
+  assert.deepEqual(extract('text/event-stream', [`data: {"model":"big","pad":"${'x'.repeat(1024 * 1024)}`, `${'y'.repeat(1000)}"}\n\n`, sse([{ model: 'after', usage: { prompt_tokens: 1, completion_tokens: 1 } }])]), { usage: null, model: 'after' }, 'an oversized event across chunks');
+  assert.deepEqual(extract('text/event-stream', [`data: {"model":"big","pad":"${'x'.repeat(1024 * 1024)}`, 'data: {"model":"tail"}\n', 'data: [DONE]\n\n']), { usage: null, model: null }, 'the rest of an oversized line is skipped, not read as an event');
   const limit = `data: {"model":"fits","usage":{"prompt_tokens":1,"completion_tokens":1},"pad":"${'x'.repeat(1024 * 1024 - 200)}"}\n\n`;
   assert.equal(extract('text/event-stream', [limit]).usage?.input, 1, 'an event just under 1 MiB is read');
   // The result can be read twice with the same answer.

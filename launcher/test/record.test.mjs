@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,7 +13,10 @@ import { syntheticKey } from './helpers/key-forms.mjs';
 import { AGENT_MOUNTS, recordValues } from './helpers/record-values.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
-const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, async (...args) => {
+  // A failure that is not an assertion (a TypeError from a broken module) is reported as an assertion failure.
+  try { return await fn(...args); } catch (error) { if (error?.code === 'ERR_ASSERTION') throw error; assert.fail(`threw: ${String(error?.message ?? error)}`); }
+});
 
 const FIELDS = [
   'format', 'run_id', 'tag', 'launcher', 'agent', 'provider', 'ticket', 'inputs', 'exports', 'image', 'runtime', 'mounts', 'mount_summary', 'network', 'isolation_checks', 'egress_log',
@@ -57,7 +61,7 @@ t('dod6-schema: buildRecord returns exactly the fields of A9, in order, with the
   assert.equal(RECORD_FORMAT, 'acoder-run-record/2');
   assert.deepEqual(RECORD_FIELDS, FIELDS);
   const values = recordValues();
-  const record = build();
+  const record = must(() => buildRecord(values));
   assert.deepEqual(Object.keys(record), FIELDS);
   const { plan_mounts: planMounts, ...rest } = values;
   assert.deepEqual(record, { format: 'acoder-run-record/2', ...rest, mount_summary: must(() => mountSummary(values.mounts, planMounts)) });
@@ -87,7 +91,7 @@ t('dod6-schema: a missing field, a wrong type, a null that is not allowed and an
     const isOpenValue = OPEN_MAPS.has(parts.slice(0, -1).filter(part => typeof part !== 'number').join('.'));
     if (!Array.isArray(parent) && !isOpenValue) {
       const gone = problemsOf(withChange((target, name) => { delete target[name]; }));
-      assert.ok(mentions(gone, dotted), `missing ${dotted} is rejected: ${JSON.stringify(gone)}`);
+      assert.ok(mentions(gone, dotted) && gone.some(problem => problem.includes('missing')), `missing ${dotted} is rejected: ${JSON.stringify(gone)}`);
     }
     const wrong = problemsOf(withChange((target, name) => { target[name] = wrongTypeOf(node); }));
     assert.ok(mentions(wrong, dotted), `a wrong type for ${dotted} is rejected: ${JSON.stringify(wrong)}`);
@@ -156,7 +160,7 @@ t('dod6-schema: enumerations, integers, hashes and the cross-field rules', () =>
   const hashes = ['launcher.agent_payload_sha256', 'launcher.egress_payload_sha256', 'launcher.skill_sha256', 'ticket.sha256', 'exports.0.manifest_sha256', 'reports.md.sha256', 'reports.json.sha256'];
   for (const dotted of hashes) {
     const parts = dotted.split('.').map(part => (/^\d+$/.test(part) ? Number(part) : part));
-    for (const bad of ['abc', 'A'.repeat(64), 'g'.repeat(64), `${'a'.repeat(64)}0`, '']) assert.ok(mentions(problemsOf(set(parts, bad)), dotted), `${dotted} = ${bad.slice(0, 8)} is rejected`);
+    for (const bad of ['abc', 'A'.repeat(64), 'g'.repeat(64), `${'a'.repeat(64)}0`, 'a'.repeat(63), '']) assert.ok(mentions(problemsOf(set(parts, bad)), dotted), `${dotted} = ${bad.slice(0, 8)} is rejected`);
   }
   for (const good of ['a'.repeat(40), 'b'.repeat(64)]) assert.deepEqual(problemsOf(set(['exports', 0, 'source_commit'], good)), []);
   for (const bad of ['a'.repeat(39), 'A'.repeat(40), 'a'.repeat(41), '']) assert.ok(mentions(problemsOf(set(['exports', 0, 'source_commit'], bad)), 'exports.0.source_commit'));
@@ -165,6 +169,13 @@ t('dod6-schema: enumerations, integers, hashes and the cross-field rules', () =>
   assert.ok(mentions(problemsOf(set(['mounts', 1, 'persistent'], false)), 'mounts.1.persistent'), 'a bind is persistent');
   // advisory counted_by names the adapter; the egress network is a name.
   assert.ok(mentions(problemsOf(set(['usage', 'advisory', 'counted_by'], 'egress')), 'usage.advisory.counted_by'));
+  assert.ok(mentions(problemsOf(set(['format'], 'acoder-run-record/1')), 'format'), 'the format name is the one of A9');
+  assert.ok(mentions(problemsOf(set(['exports', 0, 'verified'], false)), 'exports.0.verified'), 'a record holds verified exports only');
+  assert.ok(mentions(problemsOf(set(['egress_log', 0, 'reason'], 'bogus')), 'egress_log.0.reason'), 'the reason is a fixed code');
+  assert.deepEqual(problemsOf(set(['egress_log', 0, 'reason'], 'acoder_budget_calls')), []);
+  for (const field of ['launched', 'ended']) assert.ok(mentions(problemsOf(set(['times', field], 'yesterday')), `times.${field}`), 'a time is RFC 3339');
+  assert.ok(mentions(problemsOf(set(['times', 'released'], 'yesterday')), 'times.released'));
+  assert.ok(mentions(problemsOf(set(['egress_totals', 'refused_by_reason'], { 'Bad Key': 1 })), 'egress_totals.refused_by_reason'), 'the keys of refused_by_reason are fixed codes');
   assert.ok(mentions(problemsOf(set(['usage', 'advisory', 'tokens'], { input: 'x' })), 'usage.advisory.tokens'));
   assert.ok(mentions(problemsOf(set(['egress_totals', 'refused_by_reason'], { acoder_x: -1 })), 'egress_totals.refused_by_reason'));
   assert.ok(mentions(problemsOf(set(['egress_log', 0, 'response_model'], 'é')), 'egress_log.0.response_model'), 'response_model is printable ASCII');
@@ -218,6 +229,10 @@ t('dod6-schema: launcherSection hashes payload trees in the canonical form (type
   fs.writeFileSync(path.join(a, 'b'), 'x');
   fs.writeFileSync(path.join(a, 'B'), 'y');
   fs.symlinkSync('sub/ü.txt', path.join(a, 'link'));
+  // A directory and a sibling file whose names sort the other way round than a depth-first walk meets them: 'd.b' sorts before 'd/x'.
+  fs.mkdirSync(path.join(a, 'd'));
+  fs.writeFileSync(path.join(a, 'd', 'x'), 'inner');
+  fs.writeFileSync(path.join(a, 'd.b'), 'sibling');
   assert.equal(hashOf(a), canonicalOracle(a), 'the hash is the canonical hash');
   const section = must(() => launcherSection({ version: '9.9', agentPayload: a, egressPayload: make('p-e'), skill: a }));
   assert.deepEqual(Object.keys(section), ['version', 'agent_payload_sha256', 'egress_payload_sha256', 'skill_sha256']);
@@ -261,6 +276,10 @@ t('dod6-schema: launcherSection hashes payload trees in the canonical form (type
   fs.writeFileSync(path.join(fileX, 'n'), 'same');
   assert.notEqual(hashOf(link), hashOf(fileX), 'a link against a file with the target text as content');
   assert.ok(thrownOf(() => launcherSection({ version: '1', agentPayload: path.join(fx.base, 'absent'), egressPayload: a, skill: a })) !== null, 'a missing tree is an error');
+  assert.ok(thrownOf(() => launcherSection({ version: '1', agentPayload: path.join(a, 'b'), egressPayload: a, skill: a })) !== null, 'a file is not a payload tree');
+  const withFifo = make('special');
+  assert.equal(spawnSync('mkfifo', [path.join(withFifo, 'pipe')]).status, 0);
+  assert.match(thrownOf(() => launcherSection({ version: '1', agentPayload: withFifo, egressPayload: a, skill: a })) ?? 'no error', /special file/, 'a FIFO in a payload tree is an error');
 }));
 
 t('dod6-schema: the names of the record and the log (A6.6), and two attempts in the same second get different names', () => {
@@ -271,6 +290,7 @@ t('dod6-schema: the names of the record and the log (A6.6), and two attempts in 
   });
   assert.equal(must(() => makeRunId(new Date('2026-11-12T10:15:00.123Z'), 'a1b2c3')), '20261112T101500Z-a1b2c3');
   assert.equal(must(() => makeRunId(new Date('2026-01-02T03:04:05Z'), '000000')), '20260102T030405Z-000000');
+  for (const bad of ['xyz', 'ABCDEF', 'abcde', 'abcdefg', '']) assert.notEqual(thrownOf(() => makeRunId(new Date('2026-11-12T10:15:00Z'), bad)), null, bad);
   const date = new Date('2026-11-12T10:15:00Z');
   const ids = new Set(Array.from({ length: 30 }, () => must(() => makeRunId(date))));
   assert.ok(ids.size > 25, `six random hex characters separate attempts in the same second (${ids.size} of 30)`);
@@ -286,7 +306,9 @@ t('dod6-schema: the record is created exclusively and never overwritten (no link
   const redactor = must(() => createRedactor(fx.key));
   const record = build();
   const target = path.join(fx.stage, 'run-t.json');
-  const written = must(() => writeRecord(target, record, redactor));
+  const previous = process.umask(0o077);
+  let written;
+  try { written = must(() => writeRecord(target, record, redactor)); } finally { process.umask(previous); }
   assert.equal(written.path, target);
   const first = fs.readFileSync(target);
   assert.equal(first.toString(), must(() => serializeRecord(record, redactor)).text);
@@ -304,6 +326,24 @@ t('dod6-schema: the record is created exclusively and never overwritten (no link
   fs.symlinkSync(sentinel, link);
   assert.ok(thrownOf(() => writeRecord(link, record, redactor)) !== null, 'a link at the record path is refused');
   assert.equal(fs.readFileSync(sentinel, 'utf8'), 'sentinel');
+  // The descriptor is closed, the new file is flushed, and a partly written record is removed when a step fails.
+  const seen = [];
+  const io = { ...fs, openSync: (...args) => { const fd = fs.openSync(...args); seen.push(['open', fd]); return fd; }, closeSync: fd => { seen.push(['close', fd]); return fs.closeSync(fd); }, fsyncSync: fd => { seen.push(['fsync', fd]); return fs.fsyncSync(fd); } };
+  const flushed = path.join(fx.stage, 'run-flushed.json');
+  const result = must(() => writeRecord(flushed, record, redactor, io));
+  assert.deepEqual(seen.map(([op]) => op), ['open', 'fsync', 'close']);
+  assert.equal(seen[0][1], seen[1][1]);
+  assert.equal(result.replacements, 0);
+  const keyed = must(() => buildRecord(recordValues({ agent: { name: 'opencode', cli_version: fx.key, model: 'm', effort: 'high' } })));
+  assert.equal(must(() => writeRecord(path.join(fx.stage, 'run-keyed.json'), keyed, redactor)).replacements, 1, 'the number of replacements is reported');
+  for (const step of ['fchmodSync', 'writeFileSync', 'fsyncSync']) {
+    const failing = path.join(fx.stage, `run-${step}.json`);
+    const log = [];
+    const broken = { ...io, openSync: fs.openSync, closeSync: fd => { log.push('close'); return fs.closeSync(fd); }, [step]: () => { throw new Error(`${step} failed`); } };
+    assert.match(thrownOf(() => writeRecord(failing, record, redactor, broken)) ?? 'no error', new RegExp(`${step} failed`));
+    assert.equal(fs.existsSync(failing), false, `${step}: a partly written record is removed`);
+    assert.deepEqual(log, ['close'], `${step}: the descriptor is closed`);
+  }
   const invalid = path.join(fx.stage, 'run-bad.json');
   assert.ok(thrownOf(() => writeRecord(invalid, { ...record, tag: 7 }, redactor)) !== null, 'an invalid record is not written');
   assert.equal(fs.existsSync(invalid), false);
@@ -372,7 +412,7 @@ t('spec12-mount-summary: a valid mount list gives the expected summary; a writab
   assert.equal(build().mount_summary.equal_to_plan, true);
 });
 
-t('dod7-recorded: the ticket, export and input sections come from the prepared run (hashes of the copy, excluded subtrees, entry counts)', () => withFixture({ exports: [{ role: 'code' }, { role: 'docs', place: 'inside' }] }, async fx => {
+t('dod7-recorded: the ticket, export and input sections come from the prepared run (hashes of the copy, excluded subtrees, entry counts)', () => withFixture({ exports: [{ role: 'code' }, { role: 'docs', place: 'inside' }], transform: (role, manifest) => ({ ...manifest, source_commit: role === 'code' ? 'c'.repeat(40) : 'd'.repeat(64) }) }, async fx => {
   fs.mkdirSync(path.join(fx.mailbox, 'S1', 'scratch-other'));
   fs.writeFileSync(path.join(fx.mailbox, 'S1', 'scratch-other', 'big.txt'), 'x');
   const options = parseReviewRun(fx.argv({ add: [['--exclude', 'S1/scratch-other']] }).slice(2));
@@ -385,7 +425,7 @@ t('dod7-recorded: the ticket, export and input sections come from the prepared r
     for (const [index, role] of ['code', 'docs'].entries()) {
       const entry = fx.export(role);
       assert.deepEqual(sections.exports[index], {
-        role, path: entry.dir, in_mailbox: role === 'docs', manifest_path: entry.manifest, manifest_sha256: entry.manifestSha, source_commit: 'a'.repeat(40), entries: 7, verified: true,
+        role, path: entry.dir, in_mailbox: role === 'docs', manifest_path: entry.manifest, manifest_sha256: entry.manifestSha, source_commit: role === 'code' ? 'c'.repeat(40) : 'd'.repeat(64), entries: 7, verified: true,
       });
     }
     assert.deepEqual(sections.inputs, {

@@ -5,7 +5,10 @@ import { must, thrownOf } from './helpers/fixtures.mjs';
 import { changed, nodes, wrongTypeOf } from './helpers/schema-walk.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
-const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, async (...args) => {
+  // A failure that is not an assertion (a TypeError from a broken module) is reported as an assertion failure.
+  try { return await fn(...args); } catch (error) { if (error?.code === 'ERR_ASSERTION') throw error; assert.fail(`threw: ${String(error?.message ?? error)}`); }
+});
 
 const HOST = 'models.example.org';
 const OPTIONS = { allowlist: [HOST] };
@@ -54,7 +57,7 @@ t('spec03-metadata (event part): every event of A3.5 is accepted as printed, and
   for (const bad of [null, [], 'text', 7, {}, { event: 7 }, { event: ['clock'] }, { event: '__proto__' }, { event: 'constructor' }]) {
     for (const source of ['sidecar', 'supervisor']) assert.ok(problems(source, bad).length > 0, `${source}: ${JSON.stringify(bad)}`);
   }
-  assert.ok(thrownOrNot(() => validateEvent('other', SIDECAR.clock, OPTIONS)), 'an unknown source is an error');
+  assert.match(thrownOf(() => validateEvent('other', SIDECAR.clock, OPTIONS)) ?? 'no error', /unknown event source/, 'an unknown source is an error');
 });
 const thrownOrNot = fn => { try { return fn().length > 0; } catch { return true; } };
 
@@ -68,7 +71,7 @@ t('spec03-metadata (event part): a missing field, a wrong type, a null that is n
         const holder = parts.slice(0, -1).reduce((value, key) => value[key], sample);
         if (!insideOpen && !Array.isArray(holder)) {
           const gone = problems(source, changed(sample, parts, (parent, key) => { delete parent[key]; }));
-          assert.ok(gone.length > 0 && mentions(gone, String(parts.at(-1))), `missing: ${where}: ${JSON.stringify(gone)}`);
+          assert.ok(gone.length > 0 && mentions(gone, String(parts.at(-1))) && (parts.at(-1) === 'event' || gone.some(problem => problem.includes('missing'))), `missing: ${where}: ${JSON.stringify(gone)}`);
         }
         const wrong = problems(source, changed(sample, parts, (parent, key) => { parent[key] = wrongTypeOf(node); }));
         assert.ok(wrong.length > 0, `wrong type: ${where}`);
@@ -101,6 +104,7 @@ t('spec03-metadata (event part): a host that is not in the allowlist, a reason o
   for (const code of ['acoder_not_released', 'acoder_host_not_allowed', 'acoder_path_not_allowed', 'acoder_budget_wall_clock', 'acoder_budget_calls', 'acoder_budget_tokens', 'acoder_in_flight', 'acoder_usage_unreported', 'acoder_upstream_encoding']) {
     assert.ok(REASON_CODES.includes(code), code);
   }
+  assert.deepEqual([...REASON_CODES].sort(), ['acoder_body_too_large', 'acoder_budget_calls', 'acoder_budget_tokens', 'acoder_budget_wall_clock', 'acoder_host_not_allowed', 'acoder_in_flight', 'acoder_method_not_allowed', 'acoder_not_released', 'acoder_path_not_allowed', 'acoder_upstream_encoding', 'acoder_upstream_error', 'acoder_usage_unreported']);
   for (const code of REASON_CODES) assert.deepEqual(problems('sidecar', refused({ reason: code })), [], code);
   for (const bad of ['bogus', 'ACODER_BUDGET_CALLS', '', 'acoder_budget_calls ', 7]) assert.ok(mentions(problems('sidecar', refused({ reason: bad })), 'reason'), String(bad));
   assert.ok(mentions(problems('sidecar', refused({ reason: null })), 'reason'), 'a refusal has a reason');
@@ -113,7 +117,7 @@ t('spec03-metadata (event part): a host that is not in the allowlist, a reason o
   for (const good of [100, 599]) assert.deepEqual(problems('sidecar', request({ status: good })), []);
   for (const bad of ['agentx', 'PROBE', null, 7]) assert.ok(mentions(problems('sidecar', request({ phase: bad })), 'phase'));
   for (const bad of [-1, 1.5, 2 ** 53, '1']) for (const field of ['seq', 'bytes_up', 'bytes_down']) assert.ok(mentions(problems('sidecar', request({ [field]: bad })), field), `${field} ${bad}`);
-  for (const bad of ['2026-11-12 10:15:01Z', '2026-11-12T10:15:01+00:00', '2026-13-12T10:15:01Z', '2026-11-12T10:15:01', 'yesterday', 7]) {
+  for (const bad of ['2026-11-12 10:15:01Z', '2026-11-12T10:15:01+00:00', '2026-13-12T10:15:01Z', '2026-02-30T10:15:01Z', '2026-11-31T10:15:01Z', '2026-11-12T10:15:01', '2026-11-12T10:15:01.1234Z', 'yesterday', 7]) {
     assert.ok(mentions(problems('sidecar', request({ opened: bad })), 'opened'), String(bad));
     assert.ok(mentions(problems('sidecar', request({ closed: bad })), 'closed'), String(bad));
   }
@@ -135,7 +139,7 @@ t('spec03-metadata (event part): a host that is not in the allowlist, a reason o
 t('spec03-metadata (event part): fixed vocabularies of the other events, and the model sanitizer', () => {
   for (const kind of ['wall_clock', 'calls', 'tokens', 'usage_unreported']) assert.deepEqual(problems('sidecar', { event: 'limit', kind }), [], kind);
   for (const bad of ['disk', 'memory', 'Calls', null]) assert.ok(mentions(problems('sidecar', { event: 'limit', kind: bad }), 'kind'), String(bad));
-  assert.ok(FATAL_CODES.length >= 3 && new Set(FATAL_CODES).size === FATAL_CODES.length);
+  assert.deepEqual([...FATAL_CODES].sort(), ['config_invalid', 'internal_error', 'listen_failed', 'socket_error', 'upstream_failed']);
   for (const code of FATAL_CODES) assert.deepEqual(problems('sidecar', { event: 'fatal', code }), [], code);
   for (const bad of ['Error: connect ECONNREFUSED', 'stack at x', '', null, 'internal error']) assert.ok(mentions(problems('sidecar', { event: 'fatal', code: bad }), 'code'), String(bad));
   assert.ok(problems('sidecar', { event: 'fatal', code: 'internal_error', message: 'x' }).length > 0, 'a fatal event carries a code only, never a message');
@@ -148,6 +152,7 @@ t('spec03-metadata (event part): fixed vocabularies of the other events, and the
   for (const bad of ['a'.repeat(63), 'A'.repeat(64), 7]) assert.ok(mentions(problems('sidecar', { ...SIDECAR.ready, config_sha256: bad }), 'config_sha256'));
   for (const bad of [['lower_case'], ['A B'], [7], 'ACODER_RUN_ID', ['']]) assert.ok(mentions(problems('sidecar', { ...SIDECAR.ready, env_names: bad }), 'env_names'), JSON.stringify(bad));
   assert.deepEqual(problems('sidecar', { ...SIDECAR.ready, env_names: [] }), []);
+  assert.deepEqual(problems('supervisor', { ...SUPERVISOR.probes, results: [{ id: 'P8', result: 'not_run', detail: 'not_reached' }] }), []);
   for (const bad of ['P0', 'P9', 'p1', 'X1', 7]) assert.ok(mentions(problems('supervisor', { ...SUPERVISOR.probes, results: [{ id: bad, result: 'pass', detail: null }] }), 'id'), String(bad));
   for (const bad of ['ok', 'PASS', null]) assert.ok(mentions(problems('supervisor', { ...SUPERVISOR.probes, results: [{ id: 'P1', result: bad, detail: null }] }), 'result'), String(bad));
   for (const bad of ['Has Space', 'x'.repeat(65), '', 7]) assert.ok(mentions(problems('supervisor', { ...SUPERVISOR.probes, results: [{ id: 'P1', result: 'fail', detail: bad }] }), 'detail'), String(bad));
@@ -163,6 +168,8 @@ t('spec03-metadata (event part): fixed vocabularies of the other events, and the
   assert.deepEqual(must(() => sanitizeModel('gpt-6-luna')), 'gpt-6-luna');
   assert.equal(must(() => sanitizeModel('é\tmodel\n')), '??model?');
   assert.equal(must(() => sanitizeModel('x'.repeat(100))), 'x'.repeat(64));
+  assert.equal(must(() => sanitizeModel('a b~')), 'a b~', 'space and tilde are printable');
+  assert.equal(must(() => sanitizeModel('\u007f')), '?', 'DEL is not printable');
   assert.equal(must(() => sanitizeModel(null)), null);
   assert.equal(must(() => sanitizeModel(7)), null);
   assert.equal(must(() => sanitizeModel('')), null);
@@ -179,6 +186,10 @@ t('spec03-metadata (event part): an event line is one JSON object of at most 1 M
     assert.equal(typeof result.problem, 'string', bad);
     assert.ok(!result.problem.includes('not json') || bad === '', 'the problem does not echo the line');
   }
+  const exact = JSON.stringify(SIDECAR.clock).padEnd(1048576, ' ');
+  assert.equal(exact.length, 1048576);
+  assert.equal(must(() => parseEventLine('sidecar', exact, OPTIONS)).ok, true, 'a line of exactly 1 MiB is read');
+  assert.equal(must(() => parseEventLine('sidecar', `${exact} `, OPTIONS)).ok, false, 'one character more is not');
   const long = JSON.stringify({ ...SIDECAR.fatal, code: 'x'.repeat(1048576) });
   assert.equal(must(() => parseEventLine('sidecar', long, OPTIONS)).ok, false, 'a line over 1 MiB is rejected');
   assert.equal(must(() => parseEventLine('supervisor', JSON.stringify(SUPERVISOR.released), OPTIONS)).ok, true);
@@ -258,6 +269,13 @@ t('clock-events: the protocol accepts exactly one requested reply per container 
     protocol.accept('agent', clock(null, 6));
     assert.equal(protocol.complete(), false, JSON.stringify(bad));
   }
+  // A valid event of the right program that is not a clock reply is invalid too.
+  for (const [container, other] of [['egress', SIDECAR.phase], ['agent', SUPERVISOR.released]]) {
+    protocol = fresh();
+    protocol.request('egress');
+    protocol.request('agent');
+    assert.deepEqual(must(() => protocol.accept(container, other)), { ok: false, problem: 'invalid' }, `${container} ${other.event}`);
+  }
   // The sidecar's reply is a sidecar event and the supervisor's a supervisor event.
   protocol = fresh();
   protocol.request('egress');
@@ -270,7 +288,8 @@ t('clock-events: the protocol accepts exactly one requested reply per container 
   assert.equal(protocol.failed(), true);
   protocol = fresh();
   assert.equal(must(() => protocol.request('proxy')).ok, false, 'an unknown container');
-  assert.equal(must(() => protocol.accept('proxy', clock(null, 1))).ok, false);
+  assert.deepEqual(must(() => protocol.accept('proxy', clock(null, 1))), { ok: false, problem: 'unknown_container' });
+  assert.deepEqual(must(() => createClockProtocol().request('proxy')), { ok: false, problem: 'unknown_container' });
   // Both containers must have been requested: one container alone is never complete.
   protocol = fresh();
   protocol.request('egress');
@@ -284,4 +303,7 @@ t('clock-events: the protocol accepts exactly one requested reply per container 
   assert.equal(protocol.complete(), true, 'the order of the replies does not matter');
   assert.deepEqual(protocol.samples(), { egress: 1, agent: 1 });
   assert.deepEqual(fresh().samples(), { egress: null, agent: null });
+  const copy = protocol.samples();
+  copy.egress = 999;
+  assert.deepEqual(protocol.samples(), { egress: 1, agent: 1 }, 'samples() returns a copy');
 });

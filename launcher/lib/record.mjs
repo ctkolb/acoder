@@ -222,16 +222,17 @@ export function serializeRecord(record, redactor) {
 }
 
 // Exclusive creation: an existing file, or a link at the path, is never opened or changed.
-export function writeRecord(file, record, redactor) {
+// `io` is a test seam (the file system functions used); the run passes none.
+export function writeRecord(file, record, redactor, io = fs) {
   const { text, replacements } = serializeRecord(record, redactor);
-  const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o644);
+  const fd = io.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o644);
   try {
-    fs.fchmodSync(fd, 0o644);
-    fs.writeFileSync(fd, text);
-    fs.fsyncSync(fd);
+    io.fchmodSync(fd, 0o644);
+    io.writeFileSync(fd, text);
+    io.fsyncSync(fd);
   } catch (error) {
-    try { fs.unlinkSync(file); } catch { /* the original error is the one to report */ }
+    try { io.unlinkSync(file); } catch { /* the original error is the one to report */ }
     throw error;
-  } finally { fs.closeSync(fd); }
+  } finally { io.closeSync(fd); }
   return { path: file, replacements };
 }
