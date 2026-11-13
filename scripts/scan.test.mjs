@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,4 +70,17 @@ test('staged scan rejects a staged secret without printing it, and passes clean 
     assert.ok(!error.message.includes(token));
     return true;
   });
+});
+
+test('the Gitleaks version is the same in CI, the hook minimum and the docs', async () => {
+  const read = file => readFile(path.join(root, file), 'utf8');
+  const workflow = (await read('.github/workflows/ci.yml')).match(/GITLEAKS_VERSION:\s*(\d+\.\d+\.\d+)/)?.[1];
+  const hook = (await read('scripts/pre-push.mjs')).match(/Install Gitleaks (\d+\.\d+\.\d+) or newer/)?.[1];
+  const docs = (await read('docs/ci.md')).match(/Gitleaks\]\([^)]*\) (\d+\.\d+\.\d+) or newer/)?.[1];
+  assert.ok(workflow, 'workflow version not found');
+  assert.equal(hook, workflow);
+  assert.equal(docs, workflow);
+  const [major, minor, patch] = workflow.split('.').map(Number);
+  // The numeric comparison in the hook must encode the same minimum as its message.
+  assert.ok((await read('scripts/pre-push.mjs')).includes(`Number(match[1]) > ${major} || Number(match[1]) === ${major} && (Number(match[2]) > ${minor} || Number(match[2]) === ${minor} && Number(match[3]) >= ${patch})`));
 });
