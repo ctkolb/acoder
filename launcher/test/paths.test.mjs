@@ -405,3 +405,19 @@ tUnlessRoot('dod4-own-mailbox: an orchestrator directory the search cannot read 
   fs.chmodSync(dir, 0o755);
   await expectRefusalWhileUnreadable(fx, path.join(dir, 'orchestrator'), /^refused: cannot read .*orchestrator while searching for another mailbox$/);
 }));
+tUnlessRoot('dod4-own-mailbox: an own orchestrator directory whose content cannot be searched is a refusal, not an internal error', () => withFixture({}, async fx => {
+  const directory = path.join(fx.mailbox, 'orchestrator');
+  const before = listing(fx.base);
+  fs.chmodSync(directory, 0o000);
+  try {
+    const result = await fx.run({});
+    assert.equal(result.code, 2, `expected a refusal, got ${result.code}: ${result.stdout} ${result.stderr}`);
+    const lines = result.stderr.trimEnd().split('\n');
+    assert.equal(lines.length, 1, `one line on standard error: ${JSON.stringify(result.stderr)}`);
+    assert.match(lines[0], /^refused: cannot read .*orchestrator while checking the run mailbox$/);
+    assert.match(lastLine(result.stdout), /^ACODER LAUNCH (-|[A-Za-z0-9._-]+) refused -$/);
+    assert.ok(!result.stderr.includes(fx.key) && !result.stdout.includes(fx.key), 'the key is in no message');
+    assert.equal((fs.lstatSync(directory).mode & 0o7777), 0o000, 'the run did not change the mode of the directory');
+  } finally { fs.chmodSync(directory, 0o755); }
+  assert.deepEqual(listing(fx.base), before, 'a refusal has no effect');
+}));
