@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import nodeTest from 'node:test';
 import { listing, withFixture, parseJson } from './helpers/fixtures.mjs';
+import { PLACEHOLDER_KEY } from '../lib/plan.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
 const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, fn);
@@ -31,4 +32,81 @@ t('dry-run: prints one JSON plan, exits 0 and leaves nothing behind', () => with
   assert.deepEqual(listing(fx.base), before, 'the mailbox, the exports and the staging directory are unchanged');
   assert.equal(fs.existsSync(fx.writable.scratch), false);
   assert.equal(fs.existsSync(fx.writable.reportMd), false);
+}));
+
+const mountValues = args => args.flatMap((arg, index) => (args[index - 1] === '--mount' ? [arg] : []));
+const values = (args, flag) => args.flatMap((arg, index) => (args[index - 1] === flag ? [arg] : []));
+
+// S2-AC18 with S2-AC15: the plan of a dry run holds the real arguments of both containers, the volume and the network.
+t('dry-run: the plan holds the complete runtime arguments of both containers, the volume and the network (Docker by default), and nothing else is created', () => withFixture({ exports: [{ role: 'code' }, { role: 'docs', place: 'inside' }] }, async fx => {
+  const before = listing(fx.base);
+  const result = await fx.run();
+  assert.equal(result.code, 0, result.stderr);
+  const plan = parseJson(result.stdout);
+  const launch = plan.launch;
+  assert.ok(launch, 'the plan holds the launch arguments');
+  assert.equal(launch.runtime, 'docker');
+  assert.equal(plan.runtime.check, 'not_run');
+  assert.equal(plan.image.check, 'not_run');
+  assert.match(launch.run_id, /^\d{8}T\d{6}Z-[0-9a-f]{6}$/);
+  assert.deepEqual(launch.names, { agent: `acoder-agent-${launch.run_id}`, egress: `acoder-sidecar-${launch.run_id}`, volume: `acoder-egress-${launch.run_id}`, network: `acoder-ext-${launch.run_id}` });
+  const uid = process.getuid();
+  const gid = process.getgid();
+  const agent = launch.agent.create;
+  assert.equal(agent[0], 'create');
+  assert.deepEqual(values(agent, '--network'), ['none']);
+  assert.deepEqual(values(agent, '--workdir'), [fx.writable.scratch]);
+  assert.deepEqual(values(agent, '--user'), [`${uid}:${gid}`]);
+  assert.equal(agent.at(-1), '/acoder/container/entry.mjs');
+  assert.equal(agent.at(-2), `sha256:${'b'.repeat(64)}`, 'a dry run names the image as given: the check is not run');
+  const mounts = mountValues(agent);
+  const stagingOf = mount => /source=([^,]+)/.exec(mount)[1];
+  assert.equal(mounts.length, 9, 'M1, M2, one export outside the mailbox, M4 to M6, the socket volume and the two /etc files');
+  assert.match(mounts[0], new RegExp(`^type=bind,source=[^,]+/agent-payload,target=/acoder,readonly$`));
+  assert.match(mounts[1], new RegExp(`^type=bind,source=[^,]+/mailbox,target=${fx.mailbox},readonly$`));
+  assert.match(mounts[2], new RegExp(`^type=bind,source=[^,]+/export-code,target=${fx.export('code').dir},readonly$`));
+  assert.equal(mounts[3], `type=bind,source=${fx.writable.scratch},target=${fx.writable.scratch}`);
+  assert.equal(mounts[4], `type=bind,source=${fx.writable.reportMd},target=${fx.writable.reportMd}`);
+  assert.equal(mounts[5], `type=bind,source=${fx.writable.reportJson},target=${fx.writable.reportJson}`);
+  assert.equal(mounts[6], `type=volume,source=${launch.names.volume},target=/run/acoder-egress,readonly`);
+  assert.ok(stagingOf(mounts[0]).startsWith(fx.staging) && stagingOf(mounts[1]).startsWith(fx.staging), 'the mounted sources are in the staging directory');
+  assert.equal(mounts.some(mount => mount.includes('export-docs')), false, 'an export inside the mailbox has no mount of its own');
+  assert.deepEqual(values(launch.egress.create, '--network'), [launch.names.network]);
+  assert.deepEqual(values(launch.egress.create, '--env'), [`ACODER_RUN_ID=${launch.run_id}`, 'ACODER_UPSTREAM_KEY']);
+  assert.equal(launch.egress.create.at(-1), '/acoder/container/proxy.mjs');
+  assert.equal(launch.volume.create.at(-1), launch.names.volume);
+  assert.equal(launch.network.create.at(-1), launch.names.network);
+  const env = values(agent, '--env');
+  assert.ok(env.includes(`ACODER_TAG=${fx.tag}`) && env.includes('ACODER_CONTAINER=1') && env.includes(`ACODER_TICKET_SHA256=${fx.ticketSha}`));
+  assert.ok(env.some(entry => entry.startsWith('OPENCODE_CONFIG_CONTENT=') && entry.includes('http://models.example.org:8080/v1') && entry.includes(PLACEHOLDER_KEY)), 'the agent is configured with the relay address and the placeholder');
+  assert.ok(env.every(entry => !entry.includes(fx.key)), 'no key in the agent environment');
+  const command = JSON.parse(launch.payload_files.agent['agent-command.json']);
+  assert.deepEqual(command.argv.slice(0, 9), ['opencode', 'run', '--format', 'json', '--auto', '--pure', '--dir', fx.writable.scratch, '-m']);
+  assert.equal(command.argv[9], 'openai/gpt-6-luna');
+  assert.match(command.argv[10], new RegExp(`acoder container launch.*TICKET ${fx.tag}.*${fx.ticket}`));
+  assert.equal(JSON.parse(launch.payload_files.agent['run.json']).skill_sha256, plan.snapshot.skill_sha256);
+  assert.match(plan.snapshot.skill_sha256, /^[0-9a-f]{64}$/);
+  assert.equal(launch.payload_files.agent['etc/hosts'], '127.0.0.1 localhost\n127.0.0.1 models.example.org\n');
+  assert.ok(!result.stdout.includes(fx.key) && !result.stderr.includes(fx.key), 'no key value is printed');
+  assert.deepEqual(listing(fx.base), before, 'a dry run creates nothing and removes its staging directory');
+}));
+
+t('dod11-podman-args: --runtime podman gives the Podman variant in the dry-run plan; --extra-ca-cert adds the certificate variable to the sidecar only', () => withFixture({}, async fx => {
+  const ca = `${fx.base}/ca.pem`;
+  fs.writeFileSync(ca, 'pem\n');
+  const result = await fx.run({ add: [['--runtime', 'podman'], ['--extra-ca-cert', ca]] });
+  assert.equal(result.code, 0, result.stderr);
+  const plan = parseJson(result.stdout);
+  assert.ok(plan.launch, 'the plan holds the launch arguments');
+  assert.equal(plan.runtime.name, 'podman');
+  assert.equal(plan.launch.runtime, 'podman');
+  for (const args of [plan.launch.agent.create, plan.launch.egress.create]) assert.deepEqual(values(args, '--userns'), ['keep-id']);
+  assert.ok(values(plan.launch.egress.create, '--env').includes('NODE_EXTRA_CA_CERTS=/acoder/ca.pem'));
+  assert.ok(!values(plan.launch.agent.create, '--env').some(entry => entry.startsWith('NODE_EXTRA_CA_CERTS')));
+  assert.equal(JSON.parse(plan.launch.payload_files.egress['egress.json']).extra_ca, true);
+  assert.deepEqual(plan.launch.egress.env_names, ['ACODER_RUN_ID', 'ACODER_UPSTREAM_KEY', 'NODE_EXTRA_CA_CERTS']);
+  const stubRun = await fx.run({ add: [['--agent', 'stub']] });
+  assert.equal(stubRun.code, 0, stubRun.stderr);
+  assert.equal(JSON.parse(parseJson(stubRun.stdout).launch.payload_files.agent['agent-command.json']).argv[0], 'node', 'the stub adapter builds the command');
+  assert.ok(!stubRun.stdout.includes(fx.key));
 }));
