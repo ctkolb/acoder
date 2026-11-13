@@ -8,6 +8,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { adapters, providers } from '../../lib/registries.mjs';
 
+// The result of a call, or a failed assertion (never a bare Error) when it throws: tests of modules under test call them through this.
+export const must = fn => { try { return fn(); } catch (error) { if (error?.code === 'ERR_ASSERTION') throw error; assert.fail(`threw: ${String(error?.message ?? error)}`); } };
+export const mustAsync = async fn => { try { return await fn(); } catch (error) { if (error?.code === 'ERR_ASSERTION') throw error; assert.fail(`threw: ${String(error?.message ?? error)}`); } };
 export const attempt = fn => { try { return fn(); } catch (error) { return { thrown: String(error.message) }; } };
 // The message a call throws, or null when it does not throw (a refusal test then fails on its assertion, not on a TypeError).
 export const thrownOf = fn => { try { fn(); return null; } catch (error) { return String(error.message); } };
