@@ -6,6 +6,8 @@ import { checkHomeRule, checkInputPath, resolveHome } from './paths.mjs';
 import { prepare } from './prepare.mjs';
 import { Refusal, safe } from './refusal.mjs';
 
+export const formatLastLine = () => { throw new Error('not implemented'); };
+
 const GUARD = 'this build of the launcher is incomplete; container launch is disabled';
 const TICKET_NAME = /^ticket-([A-Za-z0-9._-]{1,120})\.md$/;
 
