@@ -258,7 +258,9 @@ t('spec13-lastline: the command prints the refused last line as the last line, f
   const usage = await runMain(['review', 'run', '--bogus']);
   assert.equal(usage.code, 2);
   assert.equal(lastLine(usage.stdout), 'ACODER LAUNCH - refused -');
-  const refused = await fx.run({ drop: ['--budget-calls'] });
+  const missing = await fx.run({ drop: ['--budget-calls'] });
+  assert.equal(lastLine(missing.stdout), 'ACODER LAUNCH - refused -', 'a flag error: the tag could not be established');
+  const refused = await fx.run({ set: { '--ticket-sha256': 'f'.repeat(64) } });
   assert.equal(refused.code, 2);
   assert.equal(lastLine(refused.stdout), `ACODER LAUNCH ${fx.tag} refused -`);
   assert.equal(refused.stdout.trimEnd().split('\n').at(-1), lastLine(refused.stdout));

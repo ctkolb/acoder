@@ -1,12 +1,24 @@
 // main(argv, env, deps): dispatch, exit codes and the last line of A1.6. The binary and the tests call this one function.
+import path from 'node:path';
 import { parseExportManifest, parseReviewRun } from './args.mjs';
 import { writeManifest } from './integrity.mjs';
 import { checkApiKey, loadDefaults, loadOwnerConfig, resolveSettings } from './config.mjs';
 import { checkHomeRule, checkInputPath, resolveHome } from './paths.mjs';
 import { prepare } from './prepare.mjs';
 import { Refusal, safe } from './refusal.mjs';
+import { OUTCOMES } from './state.mjs';
 
-export const formatLastLine = () => { throw new Error('not implemented'); };
+const TAG = /^[A-Za-z0-9._-]{1,120}$/;
+
+// A1.6: the last line on standard output, always `ACODER LAUNCH <tag> <outcome> <record>`; `-` stands for a tag that could not be established
+// and for a record that was not written (a refusal never has one).
+export function formatLastLine({ tag, outcome, record }) {
+  if (tag !== '-' && !TAG.test(tag)) throw new Error('the tag of the last line is - or a ticket tag');
+  if (!OUTCOMES.includes(outcome)) throw new Error('unknown outcome');
+  if (record !== '-' && !(path.isAbsolute(record) && !/[\x00-\x1f\x7f ]/.test(record))) throw new Error('the record of the last line is - or an absolute path');
+  if (outcome === 'refused' && record !== '-') throw new Error('a refusal has no record');
+  return `ACODER LAUNCH ${tag} ${outcome} ${record}`;
+}
 
 const GUARD = 'this build of the launcher is incomplete; container launch is disabled';
 const TICKET_NAME = /^ticket-([A-Za-z0-9._-]{1,120})\.md$/;
@@ -56,11 +68,11 @@ async function reviewRun(argv, env, deps, io) {
   } catch (error) {
     if (error instanceof Refusal) {
       io.stderr.write(`refused: ${error.message}\n`);
-      io.stdout.write(`ACODER LAUNCH ${tag} refused -\n`);
+      io.stdout.write(`${formatLastLine({ tag, outcome: 'refused', record: '-' })}\n`);
       return 2;
     }
     io.stderr.write(`error: ${safe(error?.message ?? error)}\n`);
-    io.stdout.write(`ACODER LAUNCH ${tag} error -\n`);
+    io.stdout.write(`${formatLastLine({ tag, outcome: 'error', record: '-' })}\n`);
     return 1;
   }
 }
