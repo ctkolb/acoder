@@ -74,7 +74,7 @@ export function prepare(options, env, deps = {}) {
       tag: writable.tag, writable: { stage: writable.stage, scratch: writable.scratch, reportMd: writable.reportMd, reportJson: writable.reportJson },
       staging: { dir: staging.dir, runId: staging.runId, mailbox: snapshot.mailbox, skill: snapshot.skill, exports: snapshot.exports },
       ticket: { path: options.ticket, sha256: options.ticketSha256 }, manifests, exports, excluded: [...options.excludes].sort(),
-      snapshot: { bytes: snapshot.bytes, entries: snapshot.entries }, skillSha256: treeHash(snapshot.skill), cleanup,
+      snapshot: { bytes: snapshot.bytes, entries: snapshot.entries }, cleanup,
     };
   } catch (error) {
     try { cleanup(); } catch { /* the original refusal is the one to report */ }

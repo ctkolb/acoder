@@ -133,7 +133,11 @@ export function findNestedMailbox(root, { ownRoot = false, prefix = '' } = {}) {
       if (seen > TICKET_ENTRY_LIMIT) throw new Refusal(`more than ${TICKET_ENTRY_LIMIT} entries under ${safe(prefix || root)}`);
       if (!entry.isDirectory()) continue;
       const child = relative === '' ? entry.name : `${relative}/${entry.name}`;
-      if (entry.name === 'orchestrator' && !(ownRoot && relative === '') && fs.readdirSync(path.join(root, child)).includes('tickets.json')) return path.posix.join(prefix, child);
+      if (entry.name === 'orchestrator' && !(ownRoot && relative === '')) {
+        let inside = false;
+        try { inside = fs.readdirSync(path.join(root, child)).includes('tickets.json'); } catch { throw new Refusal(`cannot read ${safe(path.posix.join(prefix, child))} while searching for another mailbox`); }
+        if (inside) return path.posix.join(prefix, child);
+      }
       stack.push(child);
     }
   }
