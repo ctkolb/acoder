@@ -202,7 +202,7 @@ t('confused-deputy-http: pipelining an allowed request and one for a denied host
   assert.equal(ctx.stub.requests.length, 1);
   assert.equal(ctx.recorder.connects.length, 1);
   const events = await ctx.requestEvents(2);
-  assert.deepEqual(events.map(event => event.decision), ['forwarded', 'refused']);
+  assert.deepEqual(events.sort((a, b) => a.seq - b.seq).map(event => event.decision), ['forwarded', 'refused']);
 }));
 
 t('confused-deputy-http: //, /./, /.., percent-encoded letters, a trailing slash and an empty query are refused acoder_path_not_allowed', () => withSidecar({}, async ctx => {

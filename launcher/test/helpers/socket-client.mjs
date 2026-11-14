@@ -39,5 +39,5 @@ export function raw(socketPath, text, { waitMs = 1500 } = {}) {
   });
 }
 
-// The status codes of the answers in a raw response text (several for pipelining).
-export const rawStatuses = text => [...text.matchAll(/^HTTP\/1\.[01] (\d{3}) /gm)].map(match => Number(match[1]));
+// The status codes of the answers in a raw response text (several for pipelining: an answer follows the previous body directly).
+export const rawStatuses = text => [...text.matchAll(/HTTP\/1\.[01] (\d{3}) [A-Z]/g)].map(match => Number(match[1]));

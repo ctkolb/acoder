@@ -11,7 +11,7 @@ import { ENDPOINT_HOST, jsonAnswer } from './helpers/stub-endpoint.mjs';
 const t = sidecarTest(nodeTest);
 
 const BODY = JSON.stringify({ model: 'm', input: 'hello' });
-const REMOVED = ['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'cookie', 'connection', 'keep-alive', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'x-hop'];
+const REMOVED = ['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'cookie', 'keep-alive', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'x-hop'];
 
 // S3-AC3 (dod8-proxy-strip): the stub's recorded headers.
 t('dod8-proxy-strip: client credential and hop-by-hop headers are removed; the profile header with the key is added only upstream', () => withSidecar({}, async ctx => {
@@ -25,6 +25,7 @@ t('dod8-proxy-strip: client credential and hop-by-hop headers are removed; the p
   const named = name => pairs.filter(([header]) => header === name).map(([, value]) => value);
   assert.deepEqual(named('authorization'), [`Bearer ${ctx.key}`], 'exactly the profile header with the key');
   for (const name of REMOVED.filter(item => item !== 'authorization')) assert.deepEqual(named(name), [], `${name} is removed`);
+  assert.deepEqual(named('connection'), ['close'], 'the client Connection header is removed; the upstream client sets its own');
   assert.deepEqual(named('accept-encoding'), ['identity']);
   assert.deepEqual(named('host'), [ENDPOINT_HOST]);
   assert.deepEqual(named('x-custom'), ['kept'], 'other headers pass');
@@ -134,7 +135,7 @@ t('dod8-proxy-strip: content-encoding identity is passed back', () => {
 });
 
 t('dod8-proxy-strip: a declared body above 32 MiB is refused 413 before any connect', () => withSidecar({}, async ctx => {
-  const text = `POST /v1/responses HTTP/1.1\r\nHost: ${ENDPOINT_HOST}\r\nContent-Length: ${MAX_BODY + 1}\r\n\r\nabc`;
+  const text = `POST /v1/responses HTTP/1.1\r\nHost: ${ENDPOINT_HOST}\r\nContent-Length: ${proxy.MAX_BODY + 1}\r\n\r\nabc`;
   const answerText = await raw(ctx.socket, text);
   assert.deepEqual(rawStatuses(answerText), [413]);
   assert.match(answerText, /"acoder_body_too_large"/);
@@ -145,9 +146,9 @@ t('dod8-proxy-strip: a declared body above 32 MiB is refused 413 before any conn
 }));
 
 t('dod8-proxy-strip: a declared body of exactly 32 MiB is forwarded whole', () => withSidecar({}, async ctx => {
-  const answer = await request(ctx.socket, { body: Buffer.alloc(MAX_BODY, 0x61), timeoutMs: 20000 });
+  const answer = await request(ctx.socket, { body: Buffer.alloc(proxy.MAX_BODY, 0x61), timeoutMs: 20000 });
   assert.equal(answer.status, 200);
-  assert.equal(ctx.stub.requests[0].bytes, MAX_BODY);
+  assert.equal(ctx.stub.requests[0].bytes, proxy.MAX_BODY);
 }), 40000);
 
 t('dod8-proxy-strip: a streamed body that grows above 32 MiB is cut off with 413 and never sent whole', () => withSidecar({}, async ctx => {
@@ -158,7 +159,7 @@ t('dod8-proxy-strip: a streamed body that grows above 32 MiB is cut off with 413
   const answerText = await raw(ctx.socket, body, { waitMs: 15000 });
   const events = await ctx.requestEvents(1, 15000);
   assert.deepEqual([events[0].decision, events[0].status, events[0].complete], ['forwarded', 413, false]);
-  assert.ok(events[0].bytes_up <= MAX_BODY, 'no byte above the limit was sent');
+  assert.ok(events[0].bytes_up <= proxy.MAX_BODY, 'no byte above the limit was sent');
   if (answerText !== '') assert.deepEqual(rawStatuses(answerText), [413]);
-  assert.ok((ctx.stub.requests[0]?.bytes ?? 0) <= MAX_BODY, 'the stub never received more than the limit');
+  assert.ok((ctx.stub.requests[0]?.bytes ?? 0) <= proxy.MAX_BODY, 'the stub never received more than the limit');
 }), 40000);
