@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import net from 'node:net';
 import nodeTest from 'node:test';
 import { fakeTimers, invalidEvents, waitFor, withSidecar } from './helpers/sidecar-harness.mjs';
 import { errorCode, raw, rawStatuses, request, streaming } from './helpers/socket-client.mjs';
@@ -122,6 +123,29 @@ t('stop: D-S1.d a request after STOP gets no answer bytes and no request event, 
   assert.equal(ctx.events.length, count, 'no request event and no other event');
   assert.equal(ctx.stub.requests.length, 1);
   assert.equal(ctx.recorder.connects.length, 1);
+}));
+
+t('stop: D-S1.d a request after STOP on a connection that was open before it gets no answer bytes and no request event', () => withSidecar({}, async ctx => {
+  const KEEP = `POST /v1/responses HTTP/1.1\r\nHost: ${ENDPOINT_HOST}\r\nContent-Length: 2\r\n\r\n{}`;
+  const socket = net.connect(ctx.socket);
+  let text = '';
+  socket.on('data', chunk => { text += chunk.toString('latin1'); });
+  const closed = new Promise(resolve => { socket.on('close', resolve); socket.on('error', () => {}); });
+  try {
+    socket.write(KEEP);
+    assert.ok(await waitFor(() => rawStatuses(text).length === 1, 4000), 'the first request is answered on the kept-alive connection');
+    await ctx.requestEvents(1);
+    ctx.control('STOP');
+    const count = ctx.events.length;
+    const before = text.length;
+    socket.write(KEEP);
+    await Promise.race([closed, new Promise(resolve => setTimeout(resolve, 2000))]);
+    assert.equal(text.length, before, 'no answer bytes after STOP');
+    assert.equal(ctx.events.length, count, 'no request event');
+    assert.equal(ctx.stub.requests.length, 1);
+  } finally {
+    socket.destroy();
+  }
 }));
 
 t('summary: the totals of the run: forwarded, refusals by phase and by reason, bytes, reflections, usage counts and tokens', () => withSidecar({ release: false }, async ctx => {

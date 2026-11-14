@@ -167,6 +167,7 @@ const refusals = {
   'run_id is not a resource name': [{ config: { run_id: '../x' } }, 'config_invalid'],
   'an unknown field': [{ config: { extra: 1 } }, 'config_invalid'],
   'the endpoint host is not in the allowlist': [{ config: { allowlist: ['other.test'] } }, 'config_invalid'],
+  'an allowlist entry is not a DNS name': [{ config: { allowlist: [ENDPOINT_HOST, 'Bad Host'] } }, 'config_invalid'],
   'the endpoint host is not a DNS name': [{ config: { endpoint: { host: 'Models.Test:443', path: '/v1' }, allowlist: ['Models.Test:443'] } }, 'config_invalid'],
   'the endpoint path has a query': [{ config: { endpoint: { host: ENDPOINT_HOST, path: '/v1?x=1' } } }, 'config_invalid'],
   'key_env is not a variable name': [{ config: { key_env: 'acoder-key' } }, 'config_invalid'],

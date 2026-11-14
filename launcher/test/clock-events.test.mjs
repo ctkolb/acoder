@@ -53,7 +53,7 @@ t('clock-events: the largest safe integer is a valid deadline', () => withSideca
 
 // Signed, hexadecimal, fractional, exponent, empty and unsafe-integer deadlines, and other malformed PHASE lines (one sidecar each).
 const BAD_PHASE_LINES = {
-  'plus sign': 'PHASE agent +1900000000000', 'minus sign': 'PHASE agent -1900000000000', hexadecimal: 'PHASE agent 0x1ba5f0e5800', fraction: 'PHASE agent 1900000000000.5',
+  'plus sign': 'PHASE agent +1900000000000', 'minus sign': 'PHASE agent -1900000000000', hexadecimal: 'PHASE agent 0x1ba5f0e5800', fraction: 'PHASE agent 1900000000000.5', 'zero fraction': 'PHASE agent 1900000000000.0',
   exponent: 'PHASE agent 1.9e12', 'empty deadline': 'PHASE agent ', 'unsafe integer': 'PHASE agent 9007199254740992', 'two spaces': 'PHASE agent  1900000000000',
   'trailing space': 'PHASE agent 1900000000000 ', 'digits then letters': 'PHASE agent 1900000000000ms', 'no deadline': 'PHASE agent', 'bare PHASE': 'PHASE',
   'phase probe': 'PHASE probe 1900000000000', 'extra field': 'PHASE agent 1900000000000 extra',
@@ -68,6 +68,16 @@ for (const [name, line] of Object.entries(BAD_PHASE_LINES)) {
     assert.equal(ctx.recorder.connects.length, 0);
   }));
 }
+
+t('clock-events: after STOP, CLOCK and PHASE change nothing', () => withSidecar({ release: false }, async ctx => {
+  ctx.control('STOP');
+  ctx.control('CLOCK');
+  ctx.control(`PHASE agent ${Date.now() + 600000}`);
+  assert.deepEqual(ctx.ofKind('clock'), []);
+  assert.deepEqual(ctx.ofKind('phase'), []);
+  assert.equal(ctx.sidecar.phase(), 'probe');
+  assert.deepEqual(ctx.ofKind('fatal'), []);
+}));
 
 t('clock-events: a lower-case control word is no PHASE line and changes nothing', () => withSidecar({ release: false }, async ctx => {
   ctx.control(`phase agent ${NOW}`);
