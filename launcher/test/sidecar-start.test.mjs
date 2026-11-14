@@ -86,14 +86,17 @@ t('sidecar-start: ready (configuration hash, variable names, clock), socket mode
   assert.ok(ready, `ready is printed; stderr: ${ctx.stderr().slice(0, 300)}`);
   assert.deepEqual(Object.keys(ready).sort(), ['clock_epoch_ms', 'config_sha256', 'env_names', 'event']);
   assert.equal(ready.config_sha256, sha(ctx.configText));
-  assert.deepEqual(ready.env_names, ['ACODER_RUN_ID', KEY_ENV], 'the names of the environment, never a value');
+  // macOS adds __CF_USER_TEXT_ENCODING to the environment of every process it starts; no other name may appear.
+  const platformNames = process.platform === 'darwin' ? ['__CF_USER_TEXT_ENCODING'] : [];
+  assert.deepEqual(ready.env_names.filter(name => !platformNames.includes(name)), ['ACODER_RUN_ID', KEY_ENV], 'the names of the environment, never a value');
+  assert.ok(!ready.env_names.includes(ctx.key) && !ready.env_names.includes(RUN_ID));
   assert.ok(ready.clock_epoch_ms >= before - 10000 && ready.clock_epoch_ms <= Date.now());
   assert.equal(fs.lstatSync(ctx.socket).isSocket(), true);
   assert.equal(fs.statSync(ctx.socket).mode & 0o777, 0o600, 'the socket has mode 0600');
   const upstream = await ctx.event('upstream');
   assert.deepEqual(upstream, { event: 'upstream', host: ENDPOINT_HOST, handshake: 'ok', address: '127.0.0.1' });
   assert.ok(ctx.events.indexOf(ready) < ctx.events.indexOf(upstream));
-  assert.ok(ctx.stub.counts.tls >= 1, 'a TLS handshake reached the endpoint');
+  assert.ok(await waitFor(() => ctx.stub.counts.tcp >= 1, 3000), 'the handshake reached the endpoint (its own completion is the sidecar\'s verified secureConnect)');
   assert.equal(ctx.stub.requests.length, 0, 'the handshake sends no HTTP request and no key');
   const probe = await request(ctx.socket, { method: 'GET', path: '/__acoder/probe' });
   assert.deepEqual(JSON.parse(probe.body.toString('utf8')), { run_id: RUN_ID, phase: 'probe' });
