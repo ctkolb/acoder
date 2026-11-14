@@ -7,7 +7,7 @@ import nodeTest from 'node:test';
 import { validateEvent } from '../lib/events.mjs';
 import { fixtureBase, forceRemove, sha } from './helpers/fixtures.mjs';
 import { expectedForms, syntheticKey } from './helpers/key-forms.mjs';
-import { waitFor } from './helpers/sidecar-harness.mjs';
+import { budgetLeft, runCleanups, waitFor, within } from './helpers/sidecar-harness.mjs';
 import { request, streaming } from './helpers/socket-client.mjs';
 import { ENDPOINT_HOST, jsonAnswer, makeCertificates, OPENSSL_MISSING, ssePad, sseText, startStub } from './helpers/stub-endpoint.mjs';
 
@@ -26,19 +26,22 @@ const baseConfig = () => ({
 });
 
 // options: config (fields merged into the valid configuration), configText (the file as given), noConfig, env, key, cert, scenario,
-// before(base, socketPath).
+// before(base, socketPath). Every wait has a limit of its own that fails on an assertion (G11, see `within`): the start-up steps
+// and the test body share one budget, and each cleanup has its own limit; the child is killed in the cleanup whatever happened.
 async function withMain(options, fn) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(fixtureBase(), 'acm-')));
   let stub = null;
   let child = null;
   let exited = null;
+  const left = budgetLeft();
+  let failed = false;
   try {
     const certs = makeCertificates(base);
-    stub = await startStub({ tls: certs[options.cert ?? 'good'], scenario: options.scenario });
+    stub = await within(startStub({ tls: certs[options.cert ?? 'good'], scenario: options.scenario }), left(), 'the stub endpoint listens');
     fs.writeFileSync(path.join(base, 'ca.pem'), certs.ca);
     const key = options.key ?? syntheticKey();
     const socket = path.join(base, 's');
-    await options.before?.(base, socket);
+    await within(Promise.resolve(options.before?.(base, socket)), left(), 'the preparation of the test');
     const configPath = path.join(base, 'egress.json');
     const fields = typeof options.config === 'function' ? options.config(base) : options.config;
     const configText = options.configText ?? `${JSON.stringify({ ...baseConfig(), ...fields }, null, 2)}\n`;
@@ -69,11 +72,19 @@ async function withMain(options, fn) {
       event: (kind, timeoutMs = 5000) => waitFor(() => events.find(event => event.event === kind), timeoutMs),
       exit: (timeoutMs = 5000) => Promise.race([exited, new Promise(resolve => setTimeout(() => resolve(null), timeoutMs))]),
     };
-    return await fn(ctx);
+    return await within(fn(ctx), left(), 'the test body');
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
-    if (child !== null && child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); await exited; }
-    await stub?.close();
-    forceRemove(base);
+    await runCleanups([
+      ['the sidecar process ends', () => {
+        if (child !== null && child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); return exited; }
+        return null;
+      }],
+      ['the stub endpoint closes', () => stub?.close()],
+      ['the temporary directory is removed', () => forceRemove(base)],
+    ], failed);
   }
 }
 
@@ -99,6 +110,7 @@ t('sidecar-start: ready (configuration hash, variable names, clock), socket mode
   assert.ok(await waitFor(() => ctx.stub.counts.tcp >= 1, 3000), 'the handshake reached the endpoint (its own completion is the sidecar\'s verified secureConnect)');
   assert.equal(ctx.stub.requests.length, 0, 'the handshake sends no HTTP request and no key');
   const probe = await request(ctx.socket, { method: 'GET', path: '/__acoder/probe' });
+  assert.equal(probe.status, 200, 'the probe is answered');
   assert.deepEqual(JSON.parse(probe.body.toString('utf8')), { run_id: RUN_ID, phase: 'probe' });
   const stopped = Date.now();
   ctx.send('STOP');
@@ -106,7 +118,7 @@ t('sidecar-start: ready (configuration hash, variable names, clock), socket mode
   assert.ok(exit !== null, 'the process exits within 5 s of STOP');
   assert.deepEqual([exit.code, exit.signal], [0, null]);
   assert.ok(exit.at - stopped < 5000);
-  assert.equal(ctx.events.at(-1).event, 'summary');
+  assert.equal(ctx.events.at(-1)?.event, 'summary');
   assert.deepEqual(allValid(ctx.events), []);
   assert.equal(ctx.stderr(), '');
   assert.deepEqual(formsIn(ctx.lines.join('\n'), ctx.key), []);
@@ -139,7 +151,7 @@ t('sidecar-start: end of input is STOP: the request in flight is aborted, the su
     assert.equal((await stream.done).complete, false);
     const kinds = ctx.events.map(event => event.event);
     assert.deepEqual(kinds.slice(-2), ['request', 'summary']);
-    assert.equal(ctx.events.at(-2).complete, false);
+    assert.equal(ctx.events.at(-2)?.complete, false);
     assert.deepEqual(allValid(ctx.events), []);
     assert.equal(ctx.stderr(), '');
   });
@@ -206,15 +218,26 @@ nodeTest('sidecar-start: `node proxy.mjs` runs main(): without /acoder/egress.js
   timeout: 15000, skip: fs.existsSync('/acoder/egress.json') ? 'this host has /acoder/egress.json' : false,
 }, async () => {
   const child = spawn(process.execPath, [PROXY], { env: {}, cwd: fixtureBase(), stdio: ['pipe', 'pipe', 'pipe'] });
-  let stdout = '';
-  let stderr = '';
-  child.stdout.on('data', chunk => { stdout += chunk; });
-  child.stderr.on('data', chunk => { stderr += chunk; });
-  const exit = await Promise.race([new Promise(resolve => child.on('exit', code => resolve(code))), new Promise(resolve => setTimeout(() => resolve('timeout'), 10000))]);
-  if (exit === 'timeout') child.kill('SIGKILL');
-  assert.equal(exit, 70);
-  assert.equal(stdout, '{"event":"fatal","code":"config_invalid"}\n');
-  assert.equal(stderr, '');
+  const exited = new Promise(resolve => child.on('exit', code => resolve(code)));
+  let failed = false;
+  try {
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const exit = await Promise.race([exited, new Promise(resolve => setTimeout(() => resolve('timeout'), 10000))]);
+    assert.equal(exit, 70);
+    assert.equal(stdout, '{"event":"fatal","code":"config_invalid"}\n');
+    assert.equal(stderr, '');
+  } catch (error) {
+    failed = true;
+    throw error;
+  } finally {
+    await runCleanups([['the process ends', () => {
+      if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); return exited; }
+      return null;
+    }]], failed);
+  }
 });
 
 // A profile module written at test time whose usage extractor throws an error that names the key.
