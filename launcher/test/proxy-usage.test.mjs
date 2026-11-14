@@ -16,7 +16,12 @@ const streamAnswer = (res, events) => { streamHead(res); res.end(sseText(events)
 const created = (model = 'stub-model') => ({ type: 'response.created', response: { model } });
 const completed = (usage = { input_tokens: 11, output_tokens: 7 }, model = 'stub-model') => ({ type: 'response.completed', response: { model, usage } });
 // The stub answers the requests in arrival order with the scenarios of `queue`.
-const inOrder = queue => (req, res, record) => queue.shift()(req, res, record);
+// A request beyond the queue is answered 500 (the test then fails on its counts, not on an error in the stub).
+const inOrder = queue => (req, res, record) => {
+  const next = queue.shift();
+  if (next === undefined) { res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":"unexpected request"}'); return undefined; }
+  return next(req, res, record);
+};
 const keyOf = req => String(req.headers.authorization).slice('Bearer '.length);
 const kinds = ctx => ctx.ofKind('limit').map(event => event.kind);
 const indexOf = (ctx, predicate) => ctx.events.findIndex(predicate);
@@ -93,7 +98,7 @@ t('spec08-usage: absent, malformed and oversized usage give usage null and never
     assert.deepEqual(ctx.ofKind('fatal'), []);
     const summary = await stopForSummary(ctx);
     assert.equal(summary.usage_missing, 6);
-    assert.equal(summary.tokens.total, 18);
+    assert.equal(summary.tokens?.total, 18);
     assert.equal(ctx.sidecar.accounting.snapshot().tokens_lower_bound, true);
     assert.deepEqual(kinds(ctx), [], 'tokens null: no usage_unreported');
     assert.deepEqual(ctx.exits, [0]);
@@ -161,7 +166,7 @@ t('spec08-abort: a client closes after final usage but before the end: usage is 
     assert.deepEqual(kinds(ctx), []);
     assert.equal((await request(ctx.socket, { body: '{}' })).status, 200, 'admissions stay open');
     assert.equal(ctx.stub.requests.length, 2);
-    assert.equal((await stopForSummary(ctx)).tokens.total, 36);
+    assert.equal((await stopForSummary(ctx)).tokens?.total, 36);
     assert.equal(ctx.sidecar.accounting.snapshot().usage_missing, 0);
   });
 });
@@ -205,7 +210,7 @@ t('spec08-abort: a token total that reaches its limit before any refusal latches
   const refused = await request(ctx.socket, { body: '{}' });
   assert.deepEqual([refused.status, errorCode(refused)], [429, 'acoder_budget_tokens']);
   const summary = await stopForSummary(ctx);
-  assert.deepEqual([summary.usage_missing, summary.admitted_after_token_limit, summary.tokens.total], [1, 0, 18]);
+  assert.deepEqual([summary.usage_missing, summary.admitted_after_token_limit, summary.tokens?.total], [1, 0, 18]);
   assert.deepEqual(kinds(ctx), ['tokens'], 'no usage_unreported and no second limit event');
 }));
 
@@ -238,6 +243,15 @@ t('response-model: the emitted model is sanitized to printable ASCII, truncated 
     assert.deepEqual(events.map(event => event.response_model), [`m??${'x'.repeat(61)}`, 'pre-[REDACTED]']);
     assert.ok(!JSON.stringify(ctx.events).includes(ctx.key));
     assert.deepEqual(invalidEvents(ctx.events), []);
+  });
+});
+
+t('response-model: the model is truncated to 64 characters before it is redacted (A5: sanitize, then redact)', () => {
+  const scenario = inOrder([(req, res) => jsonAnswer(res, { model: `${'x'.repeat(60)}${keyOf(req)}` })]);
+  return withSidecar({ scenario }, async ctx => {
+    assert.equal((await request(ctx.socket, { body: '{}' })).status, 200);
+    const [event] = await ctx.requestEvents(1);
+    assert.equal(event.response_model, `${'x'.repeat(60)}${ctx.key.slice(0, 4)}`, 'a truncated key is no form of the key and stays');
   });
 });
 

@@ -18,7 +18,12 @@ const held = async (req, res) => {
   res.write(sseText([{ type: 'response.created', response: { model: 'm' } }]) + ssePad());
   await new Promise(resolve => { res.on('close', resolve); setTimeout(resolve, 8000); });
 };
-const inOrder = queue => (req, res, record) => queue.shift()(req, res, record);
+// A request beyond the queue is answered 500 (the test then fails on its counts, not on an error in the stub).
+const inOrder = queue => (req, res, record) => {
+  const next = queue.shift();
+  if (next === undefined) { res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":"unexpected request"}'); return undefined; }
+  return next(req, res, record);
+};
 
 t('dod5-proxy-calls: limit L and L+5 requests one after another: the endpoint counts exactly L, 5 answers are 429 acoder_budget_calls, one limit event', () => withSidecar({ limits: { calls: 3 } }, async ctx => {
   const answers = [];
@@ -72,7 +77,7 @@ t('spec08-inflight: a token limit crossed while other requests are in flight: no
   const aborted = ctx.ofKind('request').filter(event => event.complete === false);
   assert.equal(aborted.length, 2);
   assert.deepEqual(aborted.map(event => event.usage), [null, null]);
-  assert.deepEqual([summary.forwarded, summary.usage_missing, summary.admitted_after_token_limit, summary.tokens.total, summary.in_flight_at_limit], [3, 2, 0, 18, 2]);
+  assert.deepEqual([summary.forwarded, summary.usage_missing, summary.admitted_after_token_limit, summary.tokens?.total, summary.in_flight_at_limit], [3, 2, 0, 18, 2]);
   assert.equal(ctx.sidecar.accounting.snapshot().tokens_lower_bound, true);
   assert.deepEqual(kinds(ctx), ['tokens'], 'no usage_unreported');
   assert.deepEqual(ctx.exits, [0]);

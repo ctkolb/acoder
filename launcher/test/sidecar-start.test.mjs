@@ -154,6 +154,7 @@ t('sidecar-start: U2 against an untrusted certificate reports a failed handshake
   assert.equal((await ctx.exit(5000))?.code, 0);
 }));
 
+const LOWER_KEY = syntheticKey();
 // Each start-up refusal: exactly one fatal event with its code, exit 70, no socket, nothing on standard error.
 const refusals = {
   'the key variable is missing': [{ env: { ACODER_RUN_ID: RUN_ID } }, 'config_invalid'],
@@ -171,6 +172,7 @@ const refusals = {
   'the endpoint host is not a DNS name': [{ config: { endpoint: { host: 'Models.Test:443', path: '/v1' }, allowlist: ['Models.Test:443'] } }, 'config_invalid'],
   'the endpoint path has a query': [{ config: { endpoint: { host: ENDPOINT_HOST, path: '/v1?x=1' } } }, 'config_invalid'],
   'key_env is not a variable name': [{ config: { key_env: 'acoder-key' } }, 'config_invalid'],
+  'key_env is lower case although that variable holds a valid key': [{ key: LOWER_KEY, env: { ACODER_RUN_ID: RUN_ID, acoder_key: LOWER_KEY }, config: { key_env: 'acoder_key' } }, 'config_invalid'],
   'limits.calls is 0': [{ config: { limits: { calls: 0, tokens: 1000, max_in_flight: 4 } } }, 'config_invalid'],
   'limits.tokens is negative': [{ config: { limits: { calls: 1, tokens: -1, max_in_flight: 4 } } }, 'config_invalid'],
   'limits.max_in_flight is 0': [{ config: { limits: { calls: 1, tokens: 1000, max_in_flight: 0 } } }, 'config_invalid'],
