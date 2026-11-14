@@ -26,8 +26,8 @@ export async function withSidecar(options, fn) {
   const left = budgetLeft();
   let failed = false;
   try {
-    const certs = makeCertificates(base);
-    const stub = await within(startStub({ tls: certs[options.cert ?? 'good'], scenario: options.scenario }), left(), 'the stub endpoint listens');
+    const certs = await within(mustAsync(() => makeCertificates()), left(), 'the stub certificates are made');
+    const stub = await within(mustAsync(() => startStub({ tls: certs[options.cert ?? 'good'], scenario: options.scenario })), left(), 'the stub endpoint listens');
     cleanups.unshift(['the stub endpoint closes', () => stub.close()]);
     const recorder = createRecorder(stub.port);
     const key = syntheticKey();
@@ -48,11 +48,13 @@ export async function withSidecar(options, fn) {
     await within(mustAsync(() => sidecar.listen(socket)), left(), 'the sidecar listens');
     cleanups.unshift(['the sidecar closes', () => sidecar.close()]);
     if (options.release !== false) sidecar.release(options.deadline ?? Date.now() + 600000);
-    // Waits until `count` request events were emitted (the event is emitted when the request ends, after the answer).
+    // Waits until `count` request events were emitted (the event is emitted when the request ends, after the answer) and returns all
+    // of them; fewer than `count` within `timeoutMs` is an assertion failure, so a test never reads a field of a missing event.
     const requestEvents = async (count, timeoutMs = 5000) => {
-      const until = Date.now() + timeoutMs;
-      while (events.filter(event => event.event === 'request').length < count && Date.now() < until) await new Promise(resolve => setImmediate(resolve));
-      return events.filter(event => event.event === 'request');
+      const requests = () => events.filter(event => event.event === 'request');
+      await waitFor(() => requests().length >= count, timeoutMs);
+      assert.ok(requests().length >= count, `${count} request events within ${timeoutMs} ms; got ${requests().length}`);
+      return requests();
     };
     const control = line => must(() => sidecar.control(line));
     const ofKind = kind => events.filter(event => event.event === kind);
@@ -68,33 +70,37 @@ export async function withSidecar(options, fn) {
 // G11: the mutation runner counts a test that ends by its own time limit (or any failure that is not an assertion failure) as no
 // evidence of a kill. So every wait of the sidecar tests has a limit of its own, well below the test's limit, and a wait that runs
 // out is an assertion failure that names the wait. The start-up steps and the test body share BUDGET_MS from the start of the test,
-// and each of the (at most three) cleanups has CLEANUP_MS: 22 s + 3 x 2 s stays below the 30 s limit of a test.
-export const BUDGET_MS = 22000;
+// and each of the (at most three) cleanups has CLEANUP_MS: 20 s + 3 x 2 s leaves 4 s below the 30 s limit of a test for a loaded host.
+// A start-up step or a cleanup that throws is an assertion failure too (`must`, runCleanups).
+export const BUDGET_MS = 20000;
 export const CLEANUP_MS = 2000;
 // budgetLeft() starts a budget; calling the function it returns gives the milliseconds that are left of it.
 export const budgetLeft = () => { const until = Date.now() + BUDGET_MS; return () => Math.max(0, until - Date.now()); };
 const EXPIRED = Symbol('expired');
-export async function within(promise, ms, what) {
+export async function within(value, ms, what) {
+  const promise = Promise.resolve(value);
   let timer;
   const expired = new Promise(resolve => { timer = setTimeout(() => resolve(EXPIRED), ms); });
   try {
-    const value = await Promise.race([promise, expired]);
-    if (value === EXPIRED) {
+    const result = await Promise.race([promise, expired]);
+    if (result === EXPIRED) {
       promise.catch(() => {});
       assert.fail(`${what}: not within ${ms} ms`);
     }
-    return value;
+    return result;
   } finally {
     clearTimeout(timer);
   }
 }
 
 // Runs every cleanup [what, fn] in order, each within CLEANUP_MS, also when an earlier one failed. A failed cleanup fails the test
-// only when the test itself passed (`failed` false), so it never hides the test's own failure.
+// only when the test itself passed (`failed` false), so it never hides the test's own failure; it is always an assertion failure.
 export async function runCleanups(cleanups, failed) {
   let problem = null;
   for (const [what, cleanup] of cleanups) {
-    try { await within(Promise.resolve().then(cleanup), CLEANUP_MS, what); } catch (error) { problem ??= error; }
+    try { await within(Promise.resolve().then(cleanup), CLEANUP_MS, what); } catch (error) {
+      problem ??= error?.code === 'ERR_ASSERTION' ? error : new assert.AssertionError({ message: `${what}: threw ${String(error?.message ?? error)}` });
+    }
   }
   if (problem !== null && !failed) throw problem;
 }

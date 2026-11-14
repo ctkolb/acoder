@@ -1,10 +1,11 @@
 // The stub model endpoint of the sidecar tests: an HTTPS server on the loopback address with certificates made by `openssl` at test time
 // (a test CA, a leaf for the endpoint name, a leaf for another name and a self-signed leaf). It counts every connection and records
 // every request (method, target, raw headers, body size) before the scenario answers it. It never contacts anything.
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import https from 'node:https';
 import path from 'node:path';
+import { fixtureBase, forceRemove } from './fixtures.mjs';
 
 export const ENDPOINT_HOST = 'models.test';
 export const OTHER_HOST = 'other.test';
@@ -12,23 +13,33 @@ export const OTHER_HOST = 'other.test';
 // G11: tests that need the stub certificates are skipped with this reason when `openssl` is absent.
 export const OPENSSL_MISSING = spawnSync('openssl', ['version'], { encoding: 'utf8' }).status === 0 ? false : 'openssl is not available to make the stub endpoint certificate';
 
-function openssl(dir, args) {
-  const result = spawnSync('openssl', args, { cwd: dir, encoding: 'utf8' });
-  if (result.status !== 0) throw new Error(`openssl ${args[0]} failed: ${result.stderr}`);
-}
+const openssl = (dir, args) => new Promise((resolve, reject) => {
+  execFile('openssl', args, { cwd: dir, encoding: 'utf8' }, (error, stdout, stderr) => (error ? reject(new Error(`openssl ${args[0]} failed: ${stderr}`)) : resolve()));
+});
 
-// Keys and certificates in `dir`: ca (PEM), and {key, cert} for good (signed for the endpoint name), other (signed for another name)
-// and self (self-signed for the endpoint name).
-export function makeCertificates(dir) {
+// Keys and certificates: ca (PEM), and {key, cert} for good (signed for the endpoint name), other (signed for another name) and self
+// (self-signed for the endpoint name). They are made once per test process, in a directory of their own that is removed afterwards,
+// and shared by every call: `openssl` runs without blocking the event loop (so a test's own wait limits keep working) and not once
+// per test (load).
+let made = null;
+export function makeCertificates() {
+  made ??= generate();
+  return made;
+}
+async function generate() {
+  const dir = fs.mkdtempSync(path.join(fixtureBase(), 'acc-'));
+  try { return await generateIn(dir); } finally { forceRemove(dir); }
+}
+async function generateIn(dir) {
   const ec = ['-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-days', '2'];
-  openssl(dir, ['req', '-x509', ...ec, '-keyout', 'ca.key', '-out', 'ca.pem', '-subj', '/CN=acoder test ca', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign']);
+  await openssl(dir, ['req', '-x509', ...ec, '-keyout', 'ca.key', '-out', 'ca.pem', '-subj', '/CN=acoder test ca', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign']);
   const leaf = (name, host, signed) => openssl(dir, [
     'req', '-x509', ...ec, '-keyout', `${name}.key`, '-out', `${name}.pem`, '-subj', `/CN=${host}`, '-addext', `subjectAltName=DNS:${host}`, '-addext', 'basicConstraints=CA:FALSE',
     ...(signed ? ['-CA', 'ca.pem', '-CAkey', 'ca.key'] : []),
   ]);
-  leaf('good', ENDPOINT_HOST, true);
-  leaf('other', OTHER_HOST, true);
-  leaf('self', ENDPOINT_HOST, false);
+  await leaf('good', ENDPOINT_HOST, true);
+  await leaf('other', OTHER_HOST, true);
+  await leaf('self', ENDPOINT_HOST, false);
   const read = name => fs.readFileSync(path.join(dir, name), 'utf8');
   const pair = name => ({ key: read(`${name}.key`), cert: read(`${name}.pem`) });
   return { ca: read('ca.pem'), good: pair('good'), other: pair('other'), self: pair('self') };
@@ -53,7 +64,10 @@ export function gate() {
   return { open: () => open(), opened: () => opened, wait: ms => Promise.race([promise, new Promise(resolve => { const timer = setTimeout(() => resolve(false), ms); promise.then(() => clearTimeout(timer)); })]) };
 }
 
-// scenario(req, res, record) answers a request after its body was read; it defaults to jsonAnswer.
+// scenario(req, res, record) answers a request after its body was read; it defaults to jsonAnswer. A scenario that throws or rejects
+// (also on a connection the sidecar already closed) never becomes an uncaught error of the test process: the error is kept in
+// record.scenarioError and the answer is a 500, or the connection is closed when the head was already sent, so the test fails on
+// what it asserts about the answer. Errors of the request and the answer streams are ignored the same way.
 export async function startStub({ tls, scenario = (req, res) => jsonAnswer(res) }) {
   const requests = [];
   // open: requests whose answer has not closed yet; maxOpen: the most that were open at once.
@@ -65,8 +79,16 @@ export async function startStub({ tls, scenario = (req, res) => jsonAnswer(res) 
     counts.open += 1;
     counts.maxOpen = Math.max(counts.maxOpen, counts.open);
     res.on('close', () => { counts.open -= 1; });
+    req.on('error', () => {});
+    res.on('error', () => {});
     req.on('data', chunk => { record.bytes += chunk.length; });
-    req.on('end', () => scenario(req, res, record));
+    req.on('end', () => {
+      Promise.resolve().then(() => scenario(req, res, record)).catch(error => {
+        record.scenarioError = String(error?.message ?? error);
+        if (res.headersSent || res.destroyed) res.destroy();
+        else { res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":"stub scenario failed"}'); }
+      });
+    });
   });
   server.on('connection', socket => { counts.tcp += 1; sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
   server.on('secureConnection', () => { counts.tls += 1; });

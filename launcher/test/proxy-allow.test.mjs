@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import nodeTest from 'node:test';
 import * as proxy from '../container/proxy.mjs';
 import { containerBaseUrl } from '../lib/plan.mjs';
+import { parseJson } from './helpers/fixtures.mjs';
 import { RUN_ID, invalidEvents, withSidecar } from './helpers/sidecar-harness.mjs';
 import { errorCode, raw, rawStatuses, request } from './helpers/socket-client.mjs';
 import { ENDPOINT_HOST, OPENSSL_MISSING } from './helpers/stub-endpoint.mjs';
@@ -40,9 +41,9 @@ t('dod3-proxy-allow: the allowed host and both profile paths are forwarded to th
     count += 1;
     const answer = await post(ctx.socket, { host }, { path });
     assertForwarded(ctx, answer, count, `${host} ${path}`);
-    assert.equal(ctx.stub.requests.at(-1).url, path, 'the target is passed as it is');
-    assert.equal(ctx.stub.requests.at(-1).method, 'POST');
-    assert.equal(JSON.parse(answer.body.toString()).model, 'stub-model', 'the answer is passed back');
+    assert.equal(ctx.stub.requests.at(-1)?.url, path, 'the target is passed as it is');
+    assert.equal(ctx.stub.requests.at(-1)?.method, 'POST');
+    assert.equal(parseJson(answer.body.toString())?.model, 'stub-model', 'the answer is passed back');
   }
   const events = await ctx.requestEvents(4);
   assert.deepEqual(invalidEvents(ctx.events), []);
@@ -110,7 +111,7 @@ t('dod3-proxy-allow: CONNECT and an Upgrade request are refused 405 and the conn
   for (const [name, text] of Object.entries(texts)) {
     const answer = rawAnswer(await raw(ctx.socket, text, { waitMs: 3000 }));
     assert.equal(answer.status, 405, name);
-    assert.equal(JSON.parse(answer.body.toString().split('\r\n')[0]).error.code, 'acoder_method_not_allowed', name);
+    assert.equal(parseJson(answer.body.toString().split('\r\n')[0])?.error?.code, 'acoder_method_not_allowed', name);
     assert.equal(answer.headers.connection, 'close', name);
   }
   assert.equal(ctx.stub.requests.length, 0);
@@ -124,11 +125,11 @@ t('dod3-proxy-allow: the local probe path is answered by the sidecar, never forw
   for (const host of [ENDPOINT_HOST, 'anything.invalid']) {
     const answer = await request(ctx.socket, { method: 'GET', path: '/__acoder/probe', headers: { host } });
     assert.equal(answer.status, 200);
-    assert.deepEqual(JSON.parse(answer.body.toString()), { run_id: RUN_ID, phase: 'probe' });
+    assert.deepEqual(parseJson(answer.body.toString()), { run_id: RUN_ID, phase: 'probe' });
   }
   ctx.sidecar.release(Date.now() + 60000);
   const answer = await request(ctx.socket, { method: 'GET', path: '/__acoder/probe' });
-  assert.deepEqual(JSON.parse(answer.body.toString()), { run_id: RUN_ID, phase: 'agent' });
+  assert.deepEqual(parseJson(answer.body.toString()), { run_id: RUN_ID, phase: 'agent' });
   assertRefused(ctx, await request(ctx.socket, { method: 'POST', path: '/__acoder/probe', body: '' }), 403, 'acoder_path_not_allowed', 'POST on the probe path');
   const events = await ctx.requestEvents(4);
   assert.deepEqual(invalidEvents(ctx.events), []);
@@ -166,7 +167,7 @@ t('confused-deputy-http: absolute-form targets, duplicate and conflicting Host h
   for (const [text, status, code] of cases) {
     const answer = rawAnswer(await raw(ctx.socket, text));
     assert.equal(answer.status, status, text);
-    assert.equal(JSON.parse(answer.body.toString().split('\r\n')[0]).error.code, code, text);
+    assert.equal(parseJson(answer.body.toString().split('\r\n')[0])?.error?.code, code, text);
   }
   assert.equal(ctx.stub.counts.tcp, 0);
   assert.equal(ctx.recorder.connects.length, 0);
@@ -187,7 +188,7 @@ t('confused-deputy-http: Content-Length with Transfer-Encoding, HTTP/1.0 and 0.9
   for (const [name, [text, statuses, code]] of Object.entries(cases)) {
     const answer = rawAnswer(await raw(ctx.socket, text));
     assert.ok(statuses.includes(answer.status), `${name}: status ${answer.status}`);
-    if (code !== null && answer.status !== null && answer.status !== 400) assert.equal(JSON.parse(answer.body.toString().split('\r\n')[0]).error.code, code, name);
+    if (code !== null && answer.status !== null && answer.status !== 400) assert.equal(parseJson(answer.body.toString().split('\r\n')[0])?.error?.code, code, name);
   }
   assert.equal(ctx.stub.counts.tcp, 0, 'nothing reached the stub');
   assert.equal(ctx.recorder.connects.length, 0);
@@ -227,7 +228,7 @@ t('dod3-proxy-allow: the steps are evaluated in the order of A3.2 (method before
   for (const [text, status, code] of cases) {
     const answer = rawAnswer(await raw(ctx.socket, text));
     assert.equal(answer.status, status, text);
-    assert.equal(JSON.parse(answer.body.toString().split('\r\n')[0]).error.code, code, text);
+    assert.equal(parseJson(answer.body.toString().split('\r\n')[0])?.error?.code, code, text);
   }
   const events = (await ctx.requestEvents(6)).sort((a, b) => a.seq - b.seq);
   assert.deepEqual(events.map(event => event.host), [ENDPOINT_HOST, null, null, ENDPOINT_HOST, ENDPOINT_HOST, ENDPOINT_HOST]);

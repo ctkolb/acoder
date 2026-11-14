@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import nodeTest from 'node:test';
 import { validateEvent } from '../lib/events.mjs';
-import { fixtureBase, forceRemove, sha } from './helpers/fixtures.mjs';
+import { fixtureBase, forceRemove, mustAsync, parseJson, sha } from './helpers/fixtures.mjs';
 import { expectedForms, syntheticKey } from './helpers/key-forms.mjs';
 import { budgetLeft, runCleanups, waitFor, within } from './helpers/sidecar-harness.mjs';
 import { request, streaming } from './helpers/socket-client.mjs';
@@ -36,8 +36,8 @@ async function withMain(options, fn) {
   const left = budgetLeft();
   let failed = false;
   try {
-    const certs = makeCertificates(base);
-    stub = await within(startStub({ tls: certs[options.cert ?? 'good'], scenario: options.scenario }), left(), 'the stub endpoint listens');
+    const certs = await within(mustAsync(() => makeCertificates()), left(), 'the stub certificates are made');
+    stub = await within(mustAsync(() => startStub({ tls: certs[options.cert ?? 'good'], scenario: options.scenario })), left(), 'the stub endpoint listens');
     fs.writeFileSync(path.join(base, 'ca.pem'), certs.ca);
     const key = options.key ?? syntheticKey();
     const socket = path.join(base, 's');
@@ -111,7 +111,7 @@ t('sidecar-start: ready (configuration hash, variable names, clock), socket mode
   assert.equal(ctx.stub.requests.length, 0, 'the handshake sends no HTTP request and no key');
   const probe = await request(ctx.socket, { method: 'GET', path: '/__acoder/probe' });
   assert.equal(probe.status, 200, 'the probe is answered');
-  assert.deepEqual(JSON.parse(probe.body.toString('utf8')), { run_id: RUN_ID, phase: 'probe' });
+  assert.deepEqual(parseJson(probe.body.toString('utf8')), { run_id: RUN_ID, phase: 'probe' });
   const stopped = Date.now();
   ctx.send('STOP');
   const exit = await ctx.exit(5000);

@@ -69,7 +69,7 @@ for (const [name, first, second] of [
     const answer = await post(ctx);
     assert.equal(answer.status, undefined, 'nothing is answered after the fatal event');
     assert.equal(ctx.stub.requests.length, 0);
-    assert.equal(ctx.events.at(-1).event, 'fatal', 'no event after the fatal event');
+    assert.equal(ctx.events.at(-1)?.event, 'fatal', 'no event after the fatal event');
     assert.deepEqual(invalidEvents(ctx.events), []);
   }));
 }

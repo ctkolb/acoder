@@ -95,7 +95,7 @@ t('stop: STOP latches admissions, aborts the requests in flight, prints the summ
   assert.ok(await waitFor(() => ctx.exits.length > 0, 5000), 'the sidecar asks to exit within 5 s');
   assert.deepEqual(ctx.exits, [0]);
   assert.equal(ctx.sidecar.accounting.snapshot().latched, true);
-  assert.equal(ctx.events.at(-1).event, 'summary', 'the summary is the last event');
+  assert.equal(ctx.events.at(-1)?.event, 'summary', 'the summary is the last event');
   assert.deepEqual(ctx.ofKind('summary').length, 1);
   const [event] = ctx.ofKind('request');
   assert.deepEqual([event.complete, event.usage], [false, null]);

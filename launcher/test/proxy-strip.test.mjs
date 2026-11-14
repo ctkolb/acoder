@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import nodeTest from 'node:test';
 import * as proxy from '../container/proxy.mjs';
 import { PLACEHOLDER_KEY } from '../lib/plan.mjs';
+import { parseJson } from './helpers/fixtures.mjs';
 import { expectedForms } from './helpers/key-forms.mjs';
 import { invalidEvents, withSidecar } from './helpers/sidecar-harness.mjs';
 import { errorCode, raw, rawStatuses, request } from './helpers/socket-client.mjs';
@@ -31,7 +32,7 @@ t('dod8-proxy-strip: client credential and hop-by-hop headers are removed; the p
   assert.deepEqual(named('host'), [ENDPOINT_HOST]);
   assert.deepEqual(named('x-custom'), ['kept'], 'other headers pass');
   assert.deepEqual(named('content-type'), ['application/json']);
-  assert.equal(ctx.stub.requests[0].bytes, BODY.length, 'the body is passed whole');
+  assert.equal(ctx.stub.requests[0]?.bytes, BODY.length, 'the body is passed whole');
   const all = JSON.stringify(pairs);
   assert.ok(!all.includes(PLACEHOLDER_KEY), 'the placeholder never reaches the endpoint');
   assert.ok(!all.includes('client-sent'), 'no client credential reaches the endpoint');
@@ -51,7 +52,7 @@ t('dod8-proxy-strip: hop-by-hop request headers are removed (without a Trailer h
 t('dod8-proxy-strip: a chunked request body is streamed upstream without its transfer-encoding header', () => withSidecar({}, async ctx => {
   const text = `POST /v1/responses HTTP/1.1\r\nHost: ${ENDPOINT_HOST}\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n`;
   assert.deepEqual(rawStatuses(await raw(ctx.socket, text, { waitMs: 4000 })), [200]);
-  assert.equal(ctx.stub.requests[0].bytes, 11);
+  assert.equal(ctx.stub.requests[0]?.bytes, 11);
   const events = await ctx.requestEvents(1);
   assert.equal(events[0].bytes_up, 11);
 }));
@@ -152,7 +153,7 @@ t('dod8-proxy-strip: content-encoding identity is passed back', () => {
   return withSidecar({ scenario }, async ctx => {
     const answer = await request(ctx.socket, { body: BODY });
     assert.equal(answer.status, 200);
-    assert.equal(JSON.parse(answer.body.toString()).model, 'stub-model');
+    assert.equal(parseJson(answer.body.toString())?.model, 'stub-model');
   });
 });
 
@@ -170,7 +171,7 @@ t('dod8-proxy-strip: a declared body above 32 MiB is refused 413 before any conn
 t('dod8-proxy-strip: a declared body of exactly 32 MiB is forwarded whole', () => withSidecar({}, async ctx => {
   const answer = await request(ctx.socket, { body: Buffer.alloc(proxy.MAX_BODY, 0x61), timeoutMs: 20000 });
   assert.equal(answer.status, 200);
-  assert.equal(ctx.stub.requests[0].bytes, proxy.MAX_BODY);
+  assert.equal(ctx.stub.requests[0]?.bytes, proxy.MAX_BODY);
 }), 40000);
 
 t('dod8-proxy-strip: a streamed body that grows above 32 MiB is cut off with 413 and never sent whole', () => withSidecar({}, async ctx => {

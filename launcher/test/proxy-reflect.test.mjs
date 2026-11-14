@@ -94,7 +94,7 @@ t('dod8-proxy-reflect: a deliberately thrown internal error prints a fatal event
     assert.ok(await waitFor(() => ctx.exits.length > 0, 3000));
     assert.deepEqual(ctx.exits, [70]);
     assert.deepEqual(ctx.ofKind('fatal'), [{ event: 'fatal', code: 'internal_error' }]);
-    assert.equal(ctx.events.at(-1).event, 'fatal');
+    assert.equal(ctx.events.at(-1)?.event, 'fatal');
     assert.ok(!JSON.stringify(ctx.events).includes('internal failure'));
     assert.deepEqual(invalidEvents(ctx.events), []);
   });

@@ -3,7 +3,8 @@
 import http from 'node:http';
 import net from 'node:net';
 
-// The answer {status, headers, rawHeaders, body}, or {error} when the connection failed before an answer.
+// The answer {status, headers, rawHeaders, body}, or {error, body} with an empty body when the connection failed before an answer
+// (a test that reads the body then fails on its assertion, not on a TypeError).
 export function request(socketPath, { method = 'POST', path = '/v1/responses', headers = {}, body = null, timeoutMs = 10000 } = {}) {
   return new Promise(resolve => {
     const req = http.request({ socketPath, method, path, headers: { host: 'models.test', ...headers }, agent: false, setHost: false });
@@ -14,7 +15,7 @@ export function request(socketPath, { method = 'POST', path = '/v1/responses', h
       res.on('end', () => { clearTimeout(timer); resolve({ status: res.statusCode, headers: res.headers, rawHeaders: res.rawHeaders, body: Buffer.concat(parts) }); });
       res.on('error', error => { clearTimeout(timer); resolve({ status: res.statusCode, headers: res.headers, rawHeaders: res.rawHeaders, body: Buffer.concat(parts), error: error.code ?? error.message }); });
     });
-    req.on('error', error => { clearTimeout(timer); resolve({ error: error.code ?? error.message }); });
+    req.on('error', error => { clearTimeout(timer); resolve({ error: error.code ?? error.message, body: Buffer.alloc(0) }); });
     if (body !== null) req.write(body);
     req.end();
   });
