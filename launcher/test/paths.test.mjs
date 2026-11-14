@@ -421,3 +421,23 @@ tUnlessRoot('dod4-own-mailbox: an own orchestrator directory whose content canno
   } finally { fs.chmodSync(directory, 0o755); }
   assert.deepEqual(listing(fx.base), before, 'a refusal has no effect');
 }));
+
+// TG-26-01: a present own orchestrator directory without tickets.json ends with the refusal of A2.7.1, not an internal error.
+t('dod4-own-mailbox: an own orchestrator directory without tickets.json is not a run mailbox', () => withFixture({}, async fx => {
+  fs.rmSync(fx.ledger);
+  assert.ok(fs.lstatSync(path.join(fx.mailbox, 'orchestrator')).isDirectory(), 'the orchestrator directory stays');
+  await expectRefusal(fx, {}, /is not a run mailbox \(no orchestrator\/tickets\.json\)$/);
+}));
+// TG-26-02: the path in the refusal for an unreadable own orchestrator directory is shown through safe(), so a line separator is escaped.
+tUnlessRoot('dod4-own-mailbox: the refusal for an unreadable own orchestrator directory escapes a line separator in the path', () => withFixture({ mailboxName: 'run x' }, async fx => {
+  const directory = path.join(fx.mailbox, 'orchestrator');
+  const before = listing(fx.base);
+  fs.chmodSync(directory, 0o000);
+  try {
+    const result = await fx.run({});
+    assert.equal(result.code, 2, `expected a refusal, got ${result.code}: ${result.stdout} ${result.stderr}`);
+    assert.match(result.stderr, /^refused: cannot read .*run\\u\{2028\}x\/orchestrator while checking the run mailbox\n$/);
+    assert.ok(!result.stderr.includes(' ') && !result.stdout.includes(' '), 'no raw line separator in the output');
+  } finally { fs.chmodSync(directory, 0o755); }
+  assert.deepEqual(listing(fx.base), before, 'a refusal has no effect');
+}));
