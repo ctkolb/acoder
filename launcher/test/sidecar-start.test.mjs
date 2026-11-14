@@ -197,6 +197,23 @@ t('sidecar-start: an existing socket path is a fatal listen_failed, exit 70; the
   assert.equal(ctx.stderr(), '');
 }));
 
+// `node proxy.mjs` is the program of the sidecar container. On the host /acoder/egress.json does not exist, so it must refuse at once.
+const PROXY = new URL('../container/proxy.mjs', import.meta.url).pathname;
+nodeTest('sidecar-start: `node proxy.mjs` runs main(): without /acoder/egress.json it prints one fatal config_invalid event and exits 70', {
+  timeout: 15000, skip: fs.existsSync('/acoder/egress.json') ? 'this host has /acoder/egress.json' : false,
+}, async () => {
+  const child = spawn(process.execPath, [PROXY], { env: {}, cwd: fixtureBase(), stdio: ['pipe', 'pipe', 'pipe'] });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const exit = await Promise.race([new Promise(resolve => child.on('exit', code => resolve(code))), new Promise(resolve => setTimeout(() => resolve('timeout'), 10000))]);
+  if (exit === 'timeout') child.kill('SIGKILL');
+  assert.equal(exit, 70);
+  assert.equal(stdout, '{"event":"fatal","code":"config_invalid"}\n');
+  assert.equal(stderr, '');
+});
+
 // A profile module written at test time whose usage extractor throws an error that names the key.
 const throwingProfile = base => {
   const file = path.join(base, 'throwing.mjs');
