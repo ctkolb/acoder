@@ -36,7 +36,10 @@ export async function withSidecar(options, fn) {
     };
     const sidecar = await mustAsync(async () => createSidecar({
       config, profile: options.profile ?? openai, key,
-      deps: { connect: recorder.connect, ca: [...tls.rootCertificates, certs.ca], emit: event => events.push(event), exit: code => exits.push(code), ...options.deps },
+      deps: {
+        connect: recorder.connect, ca: [...tls.rootCertificates, certs.ca], exit: code => exits.push(code), ...options.deps,
+        emit: event => { options.onEvent?.(event, sidecar); events.push(event); },
+      },
     }));
     const socket = path.join(base, 's');
     await mustAsync(() => sidecar.listen(socket));
