@@ -20,6 +20,29 @@ export function request(socketPath, { method = 'POST', path = '/v1/responses', h
   });
 }
 
+// One request whose answer is read as it arrives: {chunks, text(), status(), done, abort()}. `done` resolves with {status, complete, error}
+// when the answer ended, the connection closed or `timeoutMs` passed; abort() closes the connection from the client side.
+export function streaming(socketPath, { method = 'POST', path = '/v1/responses', headers = {}, body = '{}', timeoutMs = 10000 } = {}) {
+  const chunks = [];
+  let status = null;
+  let req;
+  const done = new Promise(resolve => {
+    req = http.request({ socketPath, method, path, headers: { host: 'models.test', ...headers }, agent: false, setHost: false });
+    const timer = setTimeout(() => { req.destroy(new Error('client timeout')); }, timeoutMs);
+    const finish = result => { clearTimeout(timer); resolve(result); };
+    req.on('response', res => {
+      status = res.statusCode;
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => finish({ status, complete: true, error: null }));
+      res.on('error', error => finish({ status, complete: false, error: error.code ?? error.message }));
+      res.on('close', () => finish({ status, complete: res.complete, error: null }));
+    });
+    req.on('error', error => finish({ status, complete: false, error: error.code ?? error.message }));
+    req.end(body);
+  });
+  return { chunks, text: () => Buffer.concat(chunks).toString('latin1'), status: () => status, done, abort: () => req.destroy() };
+}
+
 // The error code of a JSON answer of the sidecar, or null.
 export const errorCode = answer => {
   try { return JSON.parse(answer.body.toString('utf8')).error.code; } catch { return null; }

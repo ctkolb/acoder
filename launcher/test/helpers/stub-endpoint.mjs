@@ -41,14 +41,30 @@ export const jsonAnswer = (res, { usage = { input_tokens: 11, output_tokens: 7 }
   res.end(body);
 };
 
+// The text of an event stream: one `data:` line per event.
+export const sseText = events => events.map(event => `data: ${typeof event === 'string' ? event : JSON.stringify(event)}\n\n`).join('');
+// A comment line of an event stream that pads a chunk (the sidecar's body redactor holds back fewer bytes than this).
+export const ssePad = (size = 2048) => `: ${'p'.repeat(size)}\n\n`;
+// A gate a scenario waits on: open() lets it go on; wait(ms) resolves true when opened, false when `ms` passed first.
+export function gate() {
+  let open;
+  let opened = false;
+  const promise = new Promise(resolve => { open = () => { opened = true; resolve(true); }; });
+  return { open: () => open(), opened: () => opened, wait: ms => Promise.race([promise, new Promise(resolve => { const timer = setTimeout(() => resolve(false), ms); promise.then(() => clearTimeout(timer)); })]) };
+}
+
 // scenario(req, res, record) answers a request after its body was read; it defaults to jsonAnswer.
 export async function startStub({ tls, scenario = (req, res) => jsonAnswer(res) }) {
   const requests = [];
-  const counts = { tcp: 0, tls: 0 };
+  // open: requests whose answer has not closed yet; maxOpen: the most that were open at once.
+  const counts = { tcp: 0, tls: 0, open: 0, maxOpen: 0 };
   const sockets = new Set();
   const server = https.createServer({ key: tls.key, cert: tls.cert }, (req, res) => {
     const record = { method: req.method, url: req.url, rawHeaders: [...req.rawHeaders], bytes: 0 };
     requests.push(record);
+    counts.open += 1;
+    counts.maxOpen = Math.max(counts.maxOpen, counts.open);
+    res.on('close', () => { counts.open -= 1; });
     req.on('data', chunk => { record.bytes += chunk.length; });
     req.on('end', () => scenario(req, res, record));
   });

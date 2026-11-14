@@ -8,14 +8,16 @@ import { createSidecar } from '../../container/proxy.mjs';
 import * as openai from '../../providers/openai.mjs';
 import { validateEvent } from '../../lib/events.mjs';
 import { createRecorder } from './connection-recorder.mjs';
-import { fixtureBase, forceRemove, mustAsync } from './fixtures.mjs';
+import { fixtureBase, forceRemove, must, mustAsync } from './fixtures.mjs';
 import { syntheticKey } from './key-forms.mjs';
 import { ENDPOINT_HOST, makeCertificates, startStub } from './stub-endpoint.mjs';
 
 export const RUN_ID = 'a'.repeat(32);
 export const ALLOWLIST = [ENDPOINT_HOST];
 
-// options: cert ('good' | 'other' | 'self'), scenario (the stub's answer), limits, release (default true: phase agent).
+// options: cert ('good' | 'other' | 'self'), scenario (the stub's answer), limits, release (default true: phase agent), profile,
+// deps (more test seams for createSidecar: now, setTimer, the robustness limits). `exits` records every exit code the sidecar asks for
+// (it never ends the test process); `control(line)` feeds one control line.
 export async function withSidecar(options, fn) {
   // A short directory name: the path of a Unix socket is limited to about 100 bytes.
   const base = fs.realpathSync(fs.mkdtempSync(path.join(fixtureBase(), 'acs-')));
@@ -27,28 +29,52 @@ export async function withSidecar(options, fn) {
     const recorder = createRecorder(stub.port);
     const key = syntheticKey();
     const events = [];
+    const exits = [];
     const config = {
       run_id: RUN_ID, endpoint: { host: ENDPOINT_HOST, path: '/v1' }, allowlist: ALLOWLIST,
       limits: { calls: 50, tokens: 1000000, max_in_flight: 4, ...options.limits },
     };
     const sidecar = await mustAsync(async () => createSidecar({
       config, profile: options.profile ?? openai, key,
-      deps: { connect: recorder.connect, ca: [...tls.rootCertificates, certs.ca], emit: event => events.push(event) },
+      deps: { connect: recorder.connect, ca: [...tls.rootCertificates, certs.ca], emit: event => events.push(event), exit: code => exits.push(code), ...options.deps },
     }));
     const socket = path.join(base, 's');
     await mustAsync(() => sidecar.listen(socket));
     cleanups.unshift(() => sidecar.close());
-    if (options.release !== false) sidecar.release(Date.now() + 600000);
+    if (options.release !== false) sidecar.release(options.deadline ?? Date.now() + 600000);
     // Waits until `count` request events were emitted (the event is emitted when the request ends, after the answer).
     const requestEvents = async (count, timeoutMs = 5000) => {
       const until = Date.now() + timeoutMs;
       while (events.filter(event => event.event === 'request').length < count && Date.now() < until) await new Promise(resolve => setImmediate(resolve));
       return events.filter(event => event.event === 'request');
     };
-    return await fn({ socket, stub, recorder, key, events, requestEvents, sidecar, certs, config });
+    const control = line => must(() => sidecar.control(line));
+    const ofKind = kind => events.filter(event => event.event === kind);
+    return await fn({ socket, stub, recorder, key, events, exits, requestEvents, sidecar, certs, config, control, ofKind });
   } finally {
     for (const cleanup of cleanups) await cleanup();
   }
+}
+
+// Waits until predicate() is true or `timeoutMs` passes; returns the last value of predicate().
+export async function waitFor(predicate, timeoutMs = 5000) {
+  const until = Date.now() + timeoutMs;
+  let value = predicate();
+  while (!value && Date.now() < until) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+    value = predicate();
+  }
+  return value;
+}
+
+// A fake timer seam: setTimer(fn, ms) records the call and returns a handle with clear(); fire() runs the pending ones.
+export function fakeTimers() {
+  const timers = [];
+  return {
+    timers,
+    setTimer(fn, ms) { const timer = { fn, ms, cleared: false, clear() { timer.cleared = true; } }; timers.push(timer); return timer; },
+    fire() { for (const timer of timers.filter(item => !item.cleared)) { timer.cleared = true; timer.fn(); } },
+  };
 }
 
 // Every emitted line is a valid sidecar event (A3.5, lib/events.mjs).
