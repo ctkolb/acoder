@@ -21,7 +21,7 @@ It works two ways, chosen by the `Run type` line in the PROJECT block:
 
 ## Quickstart and prerequisites
 
-This is a skill collection with manual session handoffs. Supply a project with Git history, usable checks, provisioned dependencies and sessions with local file/tool access. Read [environment guidance](docs/environment.md) and [tooling contracts](docs/tooling.md) first. There is no bundled execution sandbox, mutation runner or report validator.
+This is a skill collection with manual session handoffs. Supply a project with Git history, usable checks, provisioned dependencies and sessions with local file/tool access. Read [environment guidance](docs/environment.md) and [tooling contracts](docs/tooling.md) first. There is no bundled execution sandbox or report validator. A mutation runner for Node.js test suites is included as repository tooling (see [tooling contracts](docs/tooling.md#mutation-runner)).
 The commands and evidence below are project-specific inputs, not tools shipped here.
 
 For a first run, choose a small, reversible, well-defined task. Fill Template B with `Brief: COMPLETE`, `Open-ended: NO` and a concrete definition of done. Name existing checks and set a LOW tier if its criteria apply. Save the block to your configuration file and follow Setup and The loop above; the quickstart uses the same protocol and approval rules.
