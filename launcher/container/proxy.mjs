@@ -1,7 +1,7 @@
 // The egress sidecar (A3.2): the only process that holds the model key. It answers the agent's requests on a Unix socket with
 // `node:http`, refuses everything outside the allowlist and the provider profile, and forwards the rest to the endpoint over verified
 // TLS with the key added. It imports only `node:` modules and accounting.mjs: the provider profile is passed in (A5).
-// Part 1 of S3: request handling and forwarding. Start-up, control lines, the response body redactor and the robustness limits follow.
+// The launcher drives it with control lines (CLOCK, PHASE agent <deadline>, STOP; A3.5) and reads its event lines.
 import https from 'node:https';
 import http from 'node:http';
 import tls from 'node:tls';
@@ -18,6 +18,19 @@ const REPLACEMENT = '[REDACTED]';
 const CREDENTIAL_HEADERS = ['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'cookie'];
 const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-connection', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'trailers', 'transfer-encoding', 'upgrade'];
 const BUDGET_CODES = new Set(['acoder_budget_wall_clock', 'acoder_budget_calls', 'acoder_budget_tokens', 'acoder_usage_unreported']);
+// A6.1: the sidecar exits by itself this long after the absolute deadline.
+export const DEADLINE_GRACE_MS = 30000;
+// The deadline of `PHASE agent <deadline>`: an unsigned decimal integer of epoch milliseconds (A3.6), and a safe integer.
+const PHASE_LINE = /^PHASE agent ([0-9]+)$/;
+const MAX_TIMER = 2147483647;
+
+// setTimeout for any delay (a single Node timer holds at most about 24.8 days); returns {clear}.
+function setTimer(fn, ms) {
+  let handle;
+  const arm = left => { handle = setTimeout(() => (left > MAX_TIMER ? arm(left - MAX_TIMER) : fn()), Math.min(left, MAX_TIMER)); };
+  arm(ms);
+  return { clear: () => clearTimeout(handle) };
+}
 
 // The key in the forms of A8.6 (raw; base64 and base64url in the three byte alignments; hex; percent-encoded), as one pattern,
 // longest form first. Only the characters that depend on the key bytes alone are part of a base64 form.
@@ -78,9 +91,10 @@ const writeLine = event => { process.stdout.write(`${JSON.stringify(event)}\n`);
 
 // config: the parsed egress.json {run_id, endpoint: {host, path}, allowlist, limits: {calls, tokens, max_in_flight}}; profile: the
 // provider profile module (A5); key: the model key. deps (test seams): connect (tls.connect), ca (the trust list; default: the system
-// trust store and NODE_EXTRA_CA_CERTS), now (Date.now), emit (prints one event line).
+// trust store and NODE_EXTRA_CA_CERTS), now (Date.now), emit (prints one event line), exit (ends the process with a code), setTimer.
 export function createSidecar({ config, profile, key, deps = {} }) {
-  const { connect = tls.connect, ca, now = Date.now, emit = writeLine } = deps;
+  const { connect = tls.connect, ca, now = Date.now, emit = writeLine, exit = code => process.exit(code) } = deps;
+  const schedule = deps.setTimer ?? setTimer;
   const { host: endpointHost, path: endpointPath } = config.endpoint;
   const accounting = createAccounting({ calls: config.limits.calls, tokens: config.limits.tokens, maxInFlight: config.limits.max_in_flight });
   const redactor = createHeaderRedactor(key);
@@ -88,6 +102,14 @@ export function createSidecar({ config, profile, key, deps = {} }) {
   const allowed = profile.requests.map(entry => ({ method: entry.method, target: `${endpointPath}${entry.suffix}` }));
   let phase = 'probe';
   let seq = 0;
+  // Control state: CLOCK is answered once before any PHASE line; only the first PHASE line can release; STOP ends the sidecar.
+  let clocked = false;
+  let phaseLines = 0;
+  let stopped = false;
+  let deadlineTimer = null;
+  // The abort functions of the forwarded requests in flight.
+  const active = new Set();
+  const totals = { refused_probe: 0, refused_agent: 0, refused_by_reason: {}, bytes_up: 0, bytes_down: 0 };
 
   const iso = ms => new Date(ms).toISOString();
   function begin(req) {
@@ -99,7 +121,19 @@ export function createSidecar({ config, profile, key, deps = {} }) {
   }
   function end(record) {
     record.closed = iso(now());
+    if (record.decision === 'refused') {
+      totals[record.phase === 'probe' ? 'refused_probe' : 'refused_agent'] += 1;
+      totals.refused_by_reason[record.reason] = (totals.refused_by_reason[record.reason] ?? 0) + 1;
+    }
+    totals.bytes_up += record.bytes_up;
+    totals.bytes_down += record.bytes_down;
     emit(record);
+  }
+  // A6.5: the retained limit is printed once, at the first refusal for it or before whatever reports the latch otherwise.
+  function printPending() {
+    const kind = accounting.pendingLimit();
+    if (kind === null) return;
+    emit({ event: 'limit', kind });
   }
 
   const errorBody = code => JSON.stringify({ error: { code } });
@@ -128,6 +162,8 @@ export function createSidecar({ config, profile, key, deps = {} }) {
 
   // A3.2 steps 1 to 9, in this order.
   function handle(req, res) {
+    // D-S1.d: after STOP a request gets no answer and no event; its connection is destroyed.
+    if (stopped) { req.socket.destroy(); return; }
     const record = begin(req);
     // Step 2: the local probe path.
     if (req.method === 'GET' && req.url === PROBE_PATH) {
@@ -189,9 +225,18 @@ export function createSidecar({ config, profile, key, deps = {} }) {
       record.usage = result.usage ?? null;
       const model = sanitizeModel(result.model);
       record.response_model = model === null ? null : sanitizeModel(redactor.redact(model));
+      active.delete(abort);
       accounting.finish(id, { complete, status: record.status, usage: record.usage });
+      if (!complete) printPending();
       end(record);
     }
+    // STOP and the deadline exit abort the request: it ends incomplete, with the usage seen so far.
+    function abort() {
+      upstream.destroy();
+      if (!res.destroyed) res.destroy();
+      finish(false);
+    }
+    active.add(abort);
     function fail(status, code) {
       upstream.destroy();
       record.status = status;
@@ -235,21 +280,65 @@ export function createSidecar({ config, profile, key, deps = {} }) {
   server.on('checkContinue', handle);
   const refuseSocket = (req, socket) => {
     socket.on('error', () => {});
+    if (stopped) { socket.destroy(); return; }
     refuse(socket, begin(req), 405, 'acoder_method_not_allowed');
   };
   server.on('connect', refuseSocket);
   server.on('upgrade', refuseSocket);
+  server.on('connection', socket => { if (stopped) socket.destroy(); });
+
+  function summary() {
+    const counts = accounting.snapshot();
+    return {
+      event: 'summary', forwarded: counts.forwarded, refused_probe: totals.refused_probe, refused_agent: totals.refused_agent, refused_by_reason: { ...totals.refused_by_reason },
+      bytes_up: totals.bytes_up, bytes_down: totals.bytes_down, key_reflections: redactor.count(), usage_missing: counts.usage_missing,
+      admitted_after_token_limit: counts.admitted_after_token_limit, in_flight_at_limit: counts.in_flight_at_limit, tokens: counts.tokens,
+    };
+  }
+  // STOP, end of input and the deadline exit (A3.5, A6.5): latch admissions, abort the requests in flight, print the pending limit and the
+  // summary, then exit 0. Later requests are destroyed without an answer (D-S1.d).
+  function stop() {
+    if (stopped) return;
+    stopped = true;
+    deadlineTimer?.clear();
+    accounting.stop();
+    for (const abort of [...active]) abort();
+    printPending();
+    emit(summary());
+    exit(0);
+  }
+  // The launcher's release (PHASE agent <deadline>): the phase changes once; the deadline refuses later requests and ends the sidecar
+  // DEADLINE_GRACE_MS after it.
+  function release(deadline) {
+    if (phase !== 'probe') throw new Error('released once');
+    accounting.setDeadline(deadline);
+    phase = 'agent';
+    emit({ event: 'phase', phase });
+    deadlineTimer = schedule(() => { accounting.check(now()); stop(); }, deadline + DEADLINE_GRACE_MS - now());
+  }
+  // One control line of the launcher (A3.5). A line that is not valid in the current state is rejected and changes nothing.
+  function control(line) {
+    if (line === 'STOP') return stop();
+    if (stopped) return;
+    if (line === 'CLOCK') {
+      if (clocked || phaseLines > 0) return;
+      clocked = true;
+      emit({ event: 'clock', clock_epoch_ms: now() });
+      return;
+    }
+    if (line === 'PHASE' || line.startsWith('PHASE ')) {
+      phaseLines += 1;
+      if (phaseLines > 1) return;
+      const match = PHASE_LINE.exec(line);
+      const deadline = match === null ? Number.NaN : Number(match[1]);
+      if (Number.isSafeInteger(deadline)) release(deadline);
+    }
+  }
 
   return {
-    server, accounting,
+    server, accounting, control, release, stop,
     listen: socketPath => new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, () => { server.off('error', reject); resolve(); }); }),
-    close: () => new Promise(resolve => { server.closeAllConnections(); server.close(() => resolve()); }),
-    // The launcher's release (PHASE agent <deadline>); the control line and the connection switch are built with the start-up.
-    release(deadline) {
-      if (phase !== 'probe') throw new Error('released once');
-      accounting.setDeadline(deadline);
-      phase = 'agent';
-    },
+    close: () => new Promise(resolve => { deadlineTimer?.clear(); server.closeAllConnections(); server.close(() => resolve()); }),
     phase: () => phase,
     stats: () => ({ key_reflections: redactor.count() }),
   };
