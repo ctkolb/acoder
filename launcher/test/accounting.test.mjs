@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import nodeTest from 'node:test';
 import { createAccounting } from '../container/accounting.mjs';
-import { attempt, must } from './helpers/fixtures.mjs';
+import { must, thrownOf } from './helpers/fixtures.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
 const t = (name, fn, timeout = 10000) => nodeTest(name, { timeout }, fn);
@@ -18,7 +18,7 @@ const refusedWith = (acc, code, now = 0) => assert.deepEqual(must(() => acc.admi
 
 t('dod5-accounting: the limits are validated (calls and max_in_flight positive integers, tokens a positive integer or null)', () => {
   for (const bad of [{ calls: 0 }, { calls: -1 }, { calls: 1.5 }, { calls: '3' }, { tokens: 0 }, { tokens: 2.5 }, { tokens: undefined }, { maxInFlight: 0 }, { maxInFlight: null }]) {
-    assert.ok('thrown' in attempt(() => createAccounting({ calls: 3, tokens: 1000, maxInFlight: 2, ...bad })), `refused: ${JSON.stringify(bad)}`);
+    assert.notEqual(thrownOf(() => createAccounting({ calls: 3, tokens: 1000, maxInFlight: 2, ...bad })), null, `refused: ${JSON.stringify(bad)}`);
   }
   assert.equal(must(() => createAccounting({ calls: 1, tokens: null, maxInFlight: 1 })).snapshot().forwarded, 0);
 });
@@ -103,8 +103,8 @@ t('dod5-accounting: a passed deadline refuses with acoder_budget_wall_clock and 
   assert.equal(acc.snapshot().latched, true);
   assert.equal(acc.snapshot().reason, 'wall_clock');
   refusedWith(acc, 'acoder_budget_wall_clock', 1000);
-  assert.ok('thrown' in attempt(() => acc.setDeadline(5000)), 'the deadline is set once');
-  for (const bad of [-1, 1.5, '10', Number.MAX_SAFE_INTEGER + 1]) assert.ok('thrown' in attempt(() => make().setDeadline(bad)), `deadline ${bad}`);
+  assert.notEqual(thrownOf(() => acc.setDeadline(5000)), null, 'the deadline is set once');
+  for (const bad of [-1, 1.5, '10', Number.MAX_SAFE_INTEGER + 1]) assert.notEqual(thrownOf(() => make().setDeadline(bad)), null, `deadline ${bad}`);
 });
 
 t('dod5-accounting: after the deadline every request is refused with wall_clock, even when another limit latched first; the first reason is retained', () => {
@@ -279,8 +279,8 @@ t('dod5-accounting: malformed usage counts as missing; finish of an unknown or f
   assert.equal(acc.snapshot().tokens.total, 0);
   const id = admitOk(acc);
   acc.finish(id, { complete: true, status: 200, usage: usage(1, 1) });
-  assert.ok('thrown' in attempt(() => acc.finish(id, { complete: true, status: 200, usage: usage(1, 1) })), 'a second finish');
-  assert.ok('thrown' in attempt(() => acc.finish(999, { complete: true, status: 200, usage: null })), 'an unknown id');
+  assert.notEqual(thrownOf(() => acc.finish(id, { complete: true, status: 200, usage: usage(1, 1) })), null, 'a second finish');
+  assert.notEqual(thrownOf(() => acc.finish(999, { complete: true, status: 200, usage: null })), null, 'an unknown id');
   assert.equal(acc.snapshot().tokens.total, 2);
 });
 

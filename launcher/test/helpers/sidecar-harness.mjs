@@ -4,20 +4,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import tls from 'node:tls';
-import nodeTest from 'node:test';
 import { createSidecar } from '../../container/proxy.mjs';
 import * as openai from '../../providers/openai.mjs';
 import { validateEvent } from '../../lib/events.mjs';
 import { createRecorder } from './connection-recorder.mjs';
 import { fixtureBase, forceRemove, mustAsync } from './fixtures.mjs';
 import { syntheticKey } from './key-forms.mjs';
-import { ENDPOINT_HOST, OPENSSL_MISSING, makeCertificates, startStub } from './stub-endpoint.mjs';
+import { ENDPOINT_HOST, makeCertificates, startStub } from './stub-endpoint.mjs';
 
 export const RUN_ID = 'a'.repeat(32);
 export const ALLOWLIST = [ENDPOINT_HOST];
-
-// G11: a sidecar test has its own time limit and is skipped with the reason when `openssl` is absent. Registered from the calling file.
-export const sidecarTest = (test = nodeTest) => (name, fn, timeout = 30000) => test(name, { timeout, skip: OPENSSL_MISSING }, fn);
 
 // options: cert ('good' | 'other' | 'self'), scenario (the stub's answer), limits, release (default true: phase agent).
 export async function withSidecar(options, fn) {

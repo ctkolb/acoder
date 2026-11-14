@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import nodeTest from 'node:test';
 import * as proxy from '../container/proxy.mjs';
 import { containerBaseUrl } from '../lib/plan.mjs';
-import { RUN_ID, invalidEvents, sidecarTest, withSidecar } from './helpers/sidecar-harness.mjs';
+import { RUN_ID, invalidEvents, withSidecar } from './helpers/sidecar-harness.mjs';
 import { errorCode, raw, rawStatuses, request } from './helpers/socket-client.mjs';
-import { ENDPOINT_HOST } from './helpers/stub-endpoint.mjs';
+import { ENDPOINT_HOST, OPENSSL_MISSING } from './helpers/stub-endpoint.mjs';
 
-// G11: every test has a finite time limit of its own and is registered from this file (the mutation runner counts tests per module).
-const t = sidecarTest(nodeTest);
+// G11: every test has a finite time limit of its own and is registered from this file (the mutation runner counts tests per module);
+// a test that needs the stub certificate is skipped with the reason when `openssl` is absent.
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout, skip: OPENSSL_MISSING }, fn);
 const plainTest = (name, fn, timeout = 10000) => nodeTest(name, { timeout }, fn);
 
 const BODY = JSON.stringify({ model: 'm', input: 'hello' });
@@ -209,5 +210,41 @@ t('confused-deputy-http: //, /./, /.., percent-encoded letters, a trailing slash
   const paths = ['//v1/responses', '/v1//responses', '/v1/./responses', '/v1/x/../responses', '/v1/../v1/responses', '/v1/respon%73es', '/v1/%72esponses', '/v1/responses/', '/v1/responses?', '/v1/responses#x', '/v1/responses%00', '/V1/responses', '/v1/chat/completions/'];
   for (const path of paths) assertRefused(ctx, await request(ctx.socket, { path, body: BODY }), 403, 'acoder_path_not_allowed', path);
   await ctx.requestEvents(paths.length);
+  assert.deepEqual(invalidEvents(ctx.events), []);
+}));
+
+// The order of A3.2: a request that fails several steps is refused by the first one.
+t('dod3-proxy-allow: the steps are evaluated in the order of A3.2 (method before host, host before path, path and size before admission)', () => withSidecar({ limits: { calls: 1 } }, async ctx => {
+  const first = await post(ctx.socket);
+  assert.equal(first.status, 200, 'the one call');
+  const cases = [
+    [`POST /v1/models HTTP/1.0\r\nHost: other.test\r\nContent-Length: 0\r\n\r\n`, 405, 'acoder_method_not_allowed'],
+    [`POST /v1/models HTTP/1.1\r\nHost: other.test\r\nContent-Length: 0\r\n\r\n`, 403, 'acoder_host_not_allowed'],
+    [`POST /v1/models HTTP/1.1\r\nHost: ${ENDPOINT_HOST}\r\nContent-Length: 0\r\n\r\n`, 403, 'acoder_path_not_allowed'],
+    [`POST /v1/responses HTTP/1.1\r\nHost: ${ENDPOINT_HOST}\r\nContent-Length: ${32 * 1024 * 1024 + 1}\r\n\r\n`, 413, 'acoder_body_too_large'],
+    [`POST /v1/responses HTTP/1.1\r\nHost: ${ENDPOINT_HOST}\r\nContent-Length: 0\r\n\r\n`, 429, 'acoder_budget_calls'],
+  ];
+  for (const [text, status, code] of cases) {
+    const answer = rawAnswer(await raw(ctx.socket, text));
+    assert.equal(answer.status, status, text);
+    assert.equal(JSON.parse(answer.body.toString().split('\r\n')[0]).error.code, code, text);
+  }
+  const events = (await ctx.requestEvents(6)).sort((a, b) => a.seq - b.seq);
+  assert.deepEqual(events.map(event => event.host), [ENDPOINT_HOST, null, null, ENDPOINT_HOST, ENDPOINT_HOST, ENDPOINT_HOST]);
+  assert.equal(ctx.stub.requests.length, 1);
+}));
+
+t('dod3-proxy-allow: a finished request leaves the in-flight count; the call limit refuses with 429 and one limit event', () => withSidecar({ limits: { calls: 3, max_in_flight: 1 } }, async ctx => {
+  for (let n = 1; n <= 3; n += 1) assert.equal((await post(ctx.socket)).status, 200, `request ${n} after the previous one finished`);
+  for (let n = 0; n < 2; n += 1) {
+    const answer = await post(ctx.socket);
+    assert.equal(answer.status, 429);
+    assert.equal(errorCode(answer), 'acoder_budget_calls');
+  }
+  await ctx.requestEvents(5);
+  assert.deepEqual(ctx.events.filter(event => event.event === 'limit'), [{ event: 'limit', kind: 'calls' }]);
+  assert.ok(ctx.events.findIndex(event => event.event === 'limit') < ctx.events.findIndex(event => event.reason === 'acoder_budget_calls'), 'the limit event comes with the first refusal for it');
+  assert.equal(ctx.stub.requests.length, 3);
+  assert.equal(ctx.sidecar.accounting.snapshot().in_flight, 0);
   assert.deepEqual(invalidEvents(ctx.events), []);
 }));

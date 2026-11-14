@@ -3,12 +3,13 @@ import nodeTest from 'node:test';
 import * as proxy from '../container/proxy.mjs';
 import { PLACEHOLDER_KEY } from '../lib/plan.mjs';
 import { expectedForms } from './helpers/key-forms.mjs';
-import { invalidEvents, sidecarTest, withSidecar } from './helpers/sidecar-harness.mjs';
+import { invalidEvents, withSidecar } from './helpers/sidecar-harness.mjs';
 import { errorCode, raw, rawStatuses, request } from './helpers/socket-client.mjs';
-import { ENDPOINT_HOST, jsonAnswer } from './helpers/stub-endpoint.mjs';
+import { ENDPOINT_HOST, jsonAnswer, OPENSSL_MISSING } from './helpers/stub-endpoint.mjs';
 
-// G11: every test has a finite time limit of its own and is registered from this file (the mutation runner counts tests per module).
-const t = sidecarTest(nodeTest);
+// G11: every test has a finite time limit of its own and is registered from this file (the mutation runner counts tests per module);
+// a test that needs the stub certificate is skipped with the reason when `openssl` is absent.
+const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout, skip: OPENSSL_MISSING }, fn);
 
 const BODY = JSON.stringify({ model: 'm', input: 'hello' });
 const REMOVED = ['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'cookie', 'keep-alive', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'x-hop'];
@@ -38,6 +39,13 @@ t('dod8-proxy-strip: client credential and hop-by-hop headers are removed; the p
   await ctx.requestEvents(1);
   assert.ok(!JSON.stringify(ctx.events).includes(ctx.key), 'no event holds the key');
   assert.deepEqual(invalidEvents(ctx.events), []);
+}));
+
+t('dod8-proxy-strip: hop-by-hop request headers are removed (without a Trailer header, which the upstream client would refuse)', () => withSidecar({}, async ctx => {
+  const text = `POST /v1/responses HTTP/1.1\r\nHost: ${ENDPOINT_HOST}\r\nKeep-Alive: timeout=5\r\nProxy-Connection: keep-alive\r\nTE: trailers\r\nContent-Length: ${BODY.length}\r\n\r\n${BODY}`;
+  assert.deepEqual(rawStatuses(await raw(ctx.socket, text, { waitMs: 4000 })), [200]);
+  const names = ctx.stub.headerPairs(ctx.stub.requests[0]).map(([name]) => name);
+  for (const name of ['keep-alive', 'proxy-connection', 'te']) assert.ok(!names.includes(name), `${name} is removed`);
 }));
 
 t('dod8-proxy-strip: a chunked request body is streamed upstream without its transfer-encoding header', () => withSidecar({}, async ctx => {
@@ -75,6 +83,20 @@ t('dod8-proxy-strip: several Set-Cookie and a Location holding the key are redac
     assert.equal(events[0].complete, true);
     assert.equal(events[0].usage, null);
     assert.deepEqual(invalidEvents(ctx.events), []);
+  });
+});
+
+t('dod8-proxy-strip: every key form of A8.6 in a response header value is redacted', () => {
+  let key;
+  const scenario = (req, res) => {
+    const pairs = Object.entries(expectedForms(key)).flatMap(([name, form]) => [`X-Form-${name}`, `<${form}>`]);
+    res.writeHead(200, [...pairs, 'Content-Length', '0']);
+    res.end();
+  };
+  return withSidecar({ scenario }, async ctx => {
+    key = ctx.key;
+    const answer = await request(ctx.socket, { body: BODY });
+    for (const name of Object.keys(expectedForms(ctx.key))) assert.equal(answer.headers[`x-form-${name}`], '<[REDACTED]>', name);
   });
 });
 
