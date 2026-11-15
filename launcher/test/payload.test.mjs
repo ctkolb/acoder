@@ -44,7 +44,7 @@ async function withStaged({ extraCa = false, sidecarProgram = null, exports } = 
     const options = must(() => parseReviewRun(fx.argv({ drop: ['--dry-run'], set: { '--image': IMAGE.ref }, add: [['--agent', 'stub'], ...add] }).slice(2)));
     const settings = must(() => resolveSettings({ options, owner: {}, defaults: loadDefaults(), adapters: registry, providers }));
     prepared = must(() => prepare(options, fx.env, {}));
-    const plan = must(() => planFor({ options, settings, prepared, adapters: registry, image: IMAGE, runtimeName: 'docker', runId: '20261115T101500Z-a1b2c3', eventPrefix: 'e'.repeat(32), nonce: 'f'.repeat(32), uid: 501, gid: 20 }));
+    const plan = must(() => planFor({ options, settings, prepared, adapters: registry, providers, image: IMAGE, runtimeName: 'docker', runId: '20261115T101500Z-a1b2c3', eventPrefix: 'e'.repeat(32), nonce: 'f'.repeat(32), uid: 501, gid: 20 }));
     must(() => stagePayloads({ plan, prepared, options, sidecarProgram }));
     return await fn({ fx, plan, prepared, options });
   } finally {
@@ -103,7 +103,7 @@ t('S4-AC3: neither payload holds the key in any form; the egress payload holds n
       }
     }
     const egress = files(path.join(prepared.staging.dir, 'egress-payload'));
-    const mailboxHashes = new Set(Object.values(files(fx.run)).map(bytes => sha(bytes)));
+    const mailboxHashes = new Set(Object.values(files(fx.mailbox)).map(bytes => sha(bytes)));
     for (const [name, bytes] of Object.entries(egress)) {
       assert.ok(!mailboxHashes.has(sha(bytes)), `${name} is not a mailbox file`);
       assert.ok(!bytes.toString('utf8').includes(fx.ticketText.split('\n')[0]), `${name} holds no ticket text`);
@@ -122,7 +122,7 @@ t('S4-AC3: both payloads and the snapshot live in the staging directory; only M4
       assert.equal(mount.mode, 'ro', `${mount.target} is read-only`);
     }
     const sources = binds.map(mount => mount.source);
-    for (const live of [fx.run, fx.export('code').dir, fx.export('docs').dir, path.dirname(LAUNCHER), LAUNCHER]) assert.ok(!sources.includes(live), `${live} is no mount source`);
+    for (const live of [fx.mailbox, fx.export('code').dir, fx.export('docs').dir, path.dirname(LAUNCHER), LAUNCHER]) assert.ok(!sources.includes(live), `${live} is no mount source`);
     assert.deepEqual(binds.filter(mount => writable.includes(mount.source)).map(mount => mount.target), writable);
     for (const dir of ['agent-payload', 'egress-payload', 'mailbox', 'export-code']) assert.ok(fs.lstatSync(path.join(staging, dir)).isDirectory(), dir);
   });

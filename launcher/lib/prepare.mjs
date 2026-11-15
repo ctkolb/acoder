@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseManifest, mismatchMessage, readSmallFile, sha256File, treeHash, verifyExport } from './integrity.mjs';
 import { checkLaunchPaths } from './paths.mjs';
+import { checkImageConfig } from './plan.mjs';
 import { Refusal, safe } from './refusal.mjs';
 import { createStaging, removeStaging, resolveExcludes, takeSnapshot } from './snapshot.mjs';
 
@@ -82,5 +83,15 @@ export function prepare(options, env, deps = {}) {
   }
 }
 
-// State V: the runtime and image checks (red-commit placeholder).
-export async function checkImageAndRuntime() { return {}; }
+// State V, the image and runtime checks (A10.3, A8.4, A1.5): the daemon must answer, then the LOCAL image is inspected by the reference as
+// given (nothing is pulled) and checked by checkImageConfig. `runtime` is a wrapper of lib/runtime.mjs. Returns the record's image and
+// runtime blocks; every failure is a refusal (exit code 2, no effect).
+export async function checkImageAndRuntime(options, runtime) {
+  if (typeof options.image !== 'string' || !/^(?:.+@)?sha256:[0-9a-f]{64}$/.test(options.image)) {
+    throw new Refusal('the image reference must be <name>@sha256:<64 hex> or sha256:<64 hex>; a tag or a bare name is refused');
+  }
+  const versions = await runtime.answers();
+  const inspect = await runtime.imageInspect(options.image);
+  const image = checkImageConfig(inspect, { image: options.image, allowImageEnv: options.allowImageEnv });
+  return { image, runtime: { ...versions, host_os: process.platform, host_arch: process.arch } };
+}
