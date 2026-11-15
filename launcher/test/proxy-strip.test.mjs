@@ -174,6 +174,19 @@ t('dod8-proxy-strip: a declared body of exactly 32 MiB is forwarded whole', () =
   assert.equal(ctx.stub.requests[0]?.bytes, proxy.MAX_BODY);
 }), 40000);
 
+// TG-31-01: the declared length is compared with the cap at the boundary: a Content-Length of exactly 32 MiB passes (one byte more is
+// refused in the test above), and the body is streamed to the endpoint with that header.
+t('dod8-proxy-strip: a declared Content-Length of exactly 32 MiB is admitted and the body is forwarded whole', () => withSidecar({}, async ctx => {
+  const answer = await request(ctx.socket, { headers: { 'content-length': String(proxy.MAX_BODY) }, body: Buffer.alloc(proxy.MAX_BODY, 0x63), timeoutMs: 15000 });
+  assert.equal(answer.status, 200);
+  assert.equal(ctx.stub.requests[0]?.bytes, proxy.MAX_BODY);
+  const pairs = ctx.stub.headerPairs(ctx.stub.requests[0] ?? { rawHeaders: [] });
+  assert.deepEqual(pairs.filter(([name]) => name === 'content-length' || name === 'transfer-encoding'), [['content-length', String(proxy.MAX_BODY)]], 'the body was sent with its declared length, not chunked');
+  const [event] = await ctx.requestEvents(1);
+  assert.deepEqual([event.decision, event.reason, event.status, event.bytes_up], ['forwarded', null, 200, proxy.MAX_BODY]);
+  assert.equal(ctx.sidecar.accounting.snapshot().forwarded, 1);
+}), 40000);
+
 t('dod8-proxy-strip: a streamed body that grows above 32 MiB is cut off with 413 and never sent whole', () => withSidecar({}, async ctx => {
   const head = `POST /v1/responses HTTP/1.1\r\nHost: ${ENDPOINT_HOST}\r\nTransfer-Encoding: chunked\r\n\r\n`;
   const chunk = Buffer.alloc(1024 * 1024, 0x62);
