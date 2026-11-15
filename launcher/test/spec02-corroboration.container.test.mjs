@@ -18,7 +18,7 @@ for (const [what, replacements, id] of [
   ['the path refusal event dropped', dropRequest("record.reason === 'acoder_path_not_allowed'"), 'P4'],
   ['the probe path event dropped', dropRequest("record.decision === 'local'"), 'P5'],
   ['the not-released event dropped', dropRequest("record.reason === 'acoder_not_released'"), 'P5'],
-  ['ready delayed beyond the gate limit', [["  print({ event: 'ready',", "  await new Promise(resolve => setTimeout(resolve, 20000));\n  print({ event: 'ready',"]], 'U1'],
+  ['the host refusal event reporting another reason (the supervisor reports P4 pass)', [['    totals.bytes_down += record.bytes_down;\n    emit(record);', "    totals.bytes_down += record.bytes_down;\n    if (record.reason === 'acoder_host_not_allowed') record.reason = 'acoder_path_not_allowed';\n    emit(record);"]], 'P4'],
 ]) {
   t(`spec02-corroboration: ${what}: ${id} fails and the agent marker never appears`, async () => {
     await withContainerRun({ sidecar: replacements, gateMs: 12000 }, async run => assertNotStarted(run, id));
