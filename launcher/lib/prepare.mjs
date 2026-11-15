@@ -81,3 +81,6 @@ export function prepare(options, env, deps = {}) {
     throw error;
   }
 }
+
+// State V: the runtime and image checks (red-commit placeholder).
+export async function checkImageAndRuntime() { return {}; }
