@@ -132,12 +132,35 @@ async function splitSteps(steps) {
 const FORM_NAMES = ['raw', 'base64-0', 'base64-1', 'base64-2', 'hex-lower', 'hex-upper', 'percent-lower', 'percent-upper'];
 const everySplit = (key, name) => Array.from({ length: expectedForms(key)[name].length - 1 }, (unused, index) => ({ name, at: index + 1 }));
 
-t('dod8-proxy-reflect: a chunk ending in the first bytes of a key form is held only for those bytes: replaced when the next chunk completes the form, sent when it does not', () => splitSteps(() => [
-  { name: 'raw', at: 5 }, { name: 'raw', at: 5, rest: '!' },
-  // `%xx%`: its shortest end `%` is a form prefix too, and all four bytes must be held.
-  { name: 'percent-lower', at: 4 }, { name: 'percent-lower', at: 4, rest: '!' },
-  { name: 'hex-upper', at: 7 }, { name: 'hex-upper', at: 7, rest: '!' },
-]));
+// The index of the first key byte whose hex digits hold a letter: up to and including it the lower- and upper-case hex and percent forms
+// differ, so a split there is a prefix of the one form only, whatever the random key (syntheticKey makes the two hex forms differ).
+const firstLetterByte = key => [...Buffer.from(key)].findIndex(byte => /[a-f]/.test(byte.toString(16)));
+
+t('dod8-proxy-reflect: a chunk ending in the first bytes of a key form is held only for those bytes: replaced when the next chunk completes the form, sent when it does not', () => splitSteps(key => {
+  const letter = firstLetterByte(key);
+  assert.ok(letter >= 0, 'the key has a byte with a hex letter');
+  return [
+    { name: 'raw', at: 5 }, { name: 'raw', at: 5, rest: '!' },
+    // `%..%xa%`: its shortest end `%` is a form prefix too, and every byte of it must be held.
+    { name: 'percent-lower', at: 3 * letter + 4 }, { name: 'percent-lower', at: 3 * letter + 4, rest: '!' },
+    { name: 'hex-upper', at: 2 * letter + 2 }, { name: 'hex-upper', at: 2 * letter + 2, rest: '!' },
+  ];
+}));
+
+t('dod8-proxy-reflect: a stream that ends in the first bytes of a key form gets those bytes at its end', () => {
+  const scenario = (req, res) => {
+    const forms = expectedForms(keyOf(req));
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write('data: <');
+    res.end(`${forms.raw.slice(0, 5)}|${forms['percent-lower'].slice(0, 4)}`);
+  };
+  return withSidecar({ scenario, limits: { tokens: null } }, async ctx => {
+    const answer = await request(ctx.socket, { body: '{}' });
+    const forms = expectedForms(ctx.key);
+    assert.equal(answer.body.toString('latin1'), `data: <${forms.raw.slice(0, 5)}|${forms['percent-lower'].slice(0, 4)}`, 'the held end is sent when the stream ends');
+    assert.equal(ctx.sidecar.stats().key_reflections, 0);
+  });
+});
 
 t('dod8-proxy-reflect: each key form of A8.6 split in the middle across two chunks is held back and replaced', () => splitSteps(key => FORM_NAMES.map(name => ({ name, at: Math.floor(expectedForms(key)[name].length / 2) }))));
 
