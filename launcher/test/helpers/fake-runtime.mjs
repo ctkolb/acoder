@@ -18,7 +18,7 @@ if (argv[0] === 'image' && argv[1] === 'inspect') {
   if (process.env.FAKE_IMAGE && fs.existsSync(process.env.FAKE_IMAGE)) { process.stdout.write(fs.readFileSync(process.env.FAKE_IMAGE)); process.exit(0); }
   process.stdout.write('[]\\n'); process.stderr.write('Error: No such image\\n'); process.exit(1);
 }
-if (process.env.FAKE_MODE === 'hang') setInterval(() => {}, 1000);
+if (process.env.FAKE_MODE === 'hang') { setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 20000); }
 else process.stdout.write('ok\\n');
 `;
 

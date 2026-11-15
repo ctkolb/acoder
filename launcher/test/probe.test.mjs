@@ -62,6 +62,7 @@ t('p1-sources: a non-lo device with IFF_UP set fails (device_up); lo up is fine'
 
 t('p1-sources: an IPv6 address on a non-lo device fails (ipv6_address)', () => {
   assert.deepEqual(p1(healthy({ if_inet6: `${IF_INET6}fe800000000000000000000000000001 02 40 20 80     eth0\n` })), { result: 'fail', detail: 'ipv6_address' });
+  assert.deepEqual(p1(healthy({ if_inet6: `${IF_INET6}00000000000000000000000000000001 02 80 10 80     eth0\n` })), { result: 'fail', detail: 'ipv6_address' }, 'even ::1 on a non-lo device');
 });
 
 t('p1-sources: a non-loopback IPv6 address on lo fails (ipv6_address)', () => {
@@ -352,5 +353,5 @@ t('probe results never carry a value: every detail is a fixed code (a random mar
   const marker = randomBytes(8).toString('hex');
   const result = await mustAsync(() => probeP6({ p6: [{ address: `bad-${marker}`, port: 1 }] }, { timeoutMs: 300 }));
   assert.ok(!JSON.stringify(result).includes(marker));
-  assert.match(String(result.detail ?? 'none'), CODE_PATTERN);
+  assert.deepEqual(result, { id: 'P6', result: 'fail', detail: 'input_invalid' }, 'a target that is not an IP address is refused, never looked up');
 });

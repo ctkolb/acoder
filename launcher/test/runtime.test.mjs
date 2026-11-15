@@ -111,7 +111,8 @@ t('runtime: a call that does not end within its limit is killed and reported (co
     const runtime = runtimeOf(fake);
     const hanging = runtimeOf(fake, 'docker', { FAKE_MODE: 'hang' });
     const started = Date.now();
-    const result = await mustAsync(() => hanging.call(['ps'], { timeoutMs: 500 }));
+    // The fake ends by itself after 20 s; a call that is not ended at its limit fails here on an assertion after 5 s.
+    const result = await mustAsync(() => Promise.race([hanging.call(['ps'], { timeoutMs: 500 }), new Promise(resolve => setTimeout(() => resolve({ code: 'not ended within 5 s' }), 5000))]));
     assert.equal(result.code, null);
     assert.ok(Date.now() - started < 10000, 'the call ended at its limit');
     assert.equal((await mustAsync(() => runtime.call(['ps']))).code, 0);
