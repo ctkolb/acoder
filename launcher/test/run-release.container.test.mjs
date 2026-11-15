@@ -4,7 +4,7 @@ import path from 'node:path';
 import nodeTest from 'node:test';
 import { CHECK_IDS } from '../lib/run.mjs';
 import { docker, IMAGE_ID, SKIP } from './helpers/container-env.mjs';
-import { agentNetworkExt, assertNotStarted, DNS_WRAPPER, dropRequest, insertBeforeImage, isAgent, isSidecar, maskAgentNetwork, pushSecurity, replaceIn, withContainerRun } from './helpers/container-run.mjs';
+import { agentNetworkExt, assertNotStarted, assertStagingGone, DNS_WRAPPER, dropRequest, insertBeforeImage, isAgent, isSidecar, maskAgentNetwork, pushSecurity, replaceIn, withContainerRun } from './helpers/container-run.mjs';
 
 // G11: every test has a finite time limit of its own and is registered from this file; skipped with the reason without a runtime or
 // ACODER_TEST_IMAGE (S4-AC17). Each container test asserts on the record and files its own run produced.
@@ -28,7 +28,7 @@ t('gate: a healthy run passes all fourteen checks, writes the started file, rele
     assert.equal(record.agent_exit.code, 0);
     assert.deepEqual(runLeft, { containers: [], volumes: [], networks: [] });
     assert.ok(inspected.every(entry => !entry.text.includes(fx.key)), 'no inspect answer the launcher read holds the key');
-    assert.equal(record.cleanup.status, 'complete');
+    assertStagingGone({ fx, record });
   });
 });
 

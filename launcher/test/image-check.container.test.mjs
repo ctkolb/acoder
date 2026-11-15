@@ -29,6 +29,6 @@ t('image check (real runtime): an image id that is not on the host is refused an
   const error = await runtime().answers().then(() => checkImageAndRuntime({ image: absent, allowImageEnv: [] }, runtime())).then(() => null, caught => caught);
   assert.ok(error instanceof Refusal, 'a refusal');
   assert.equal(error.message, 'the image is not on this host (image inspect found nothing; nothing is pulled)');
-  const listed = await runtime().call(['image', 'ls', '--quiet', '--no-trunc']);
-  assert.ok(!listed.stdout.includes(absent), 'the absent image was not pulled');
+  const after = await runtime().call(['image', 'inspect', absent]);
+  assert.notEqual(after.code, 0, 'the absent image was not pulled');
 });

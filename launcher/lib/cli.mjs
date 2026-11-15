@@ -7,6 +7,7 @@ import { checkApiKey, loadDefaults, loadOwnerConfig, resolveSettings } from './c
 import { checkHomeRule, checkInputPath, resolveHome } from './paths.mjs';
 import { PLACEHOLDER_KEY, agentEnvNames, buildPlan, containerBaseUrl, endpointParts } from './plan.mjs';
 import { prepare } from './prepare.mjs';
+import { runReview } from './run.mjs';
 import { canonicalHash, makeRunId } from './record.mjs';
 import { Refusal, safe } from './refusal.mjs';
 import { OUTCOMES } from './state.mjs';
@@ -86,9 +87,14 @@ async function reviewRun(argv, env, deps, io) {
     const settings = resolveSettings({ options, owner, defaults: loadDefaults(), adapters: deps.adapters, providers: deps.providers });
     checkApiKey(env, options.apiKeyEnv);
     if (!options.dryRun && deps.launchEnabled !== true) throw new Refusal(GUARD);
+    if (!options.dryRun) {
+      const result = await runReview({ options, settings, env }, deps);
+      for (const leftover of result.leftovers ?? []) io.stderr.write(`leftover: ${safe(leftover)}\n`);
+      io.stdout.write(`${formatLastLine({ tag: result.tag, outcome: result.outcome, record: result.record })}\n`);
+      return result.exit_code;
+    }
     const prepared = prepare(options, env, deps);
     try {
-      if (!options.dryRun) throw new Refusal('the launch sequence is not available in this build part');
       io.stdout.write(`${JSON.stringify(dryRunPlan(options, settings, prepared, deps), null, 2)}\n`);
       return 0;
     } finally {
@@ -124,6 +130,11 @@ export async function main(argv, env, deps) {
   const io = { stdout: deps.stdout ?? process.stdout, stderr: deps.stderr ?? process.stderr };
   const [command, subcommand, ...rest] = argv;
   if (command === 'review' && subcommand === 'run') return reviewRun(rest, env, deps, io);
+  // A6.9: the cleanup command is built in part 2 of S4; until then it refuses without any effect.
+  if (command === 'review' && subcommand === 'cleanup') {
+    io.stderr.write('refused: acoder review cleanup is not available in this build part\n');
+    return 2;
+  }
   if (command === 'export' && subcommand === 'manifest') return exportManifest(rest, io);
   io.stderr.write('refused: usage: acoder review run <flags> | acoder review cleanup <flags> | acoder export manifest <flags>\n');
   return 2;

@@ -101,8 +101,9 @@ t('ra-topology: a --log-driver none container can be attached, receives a line o
     attach.kill('SIGKILL');
     await until(() => fs.existsSync(path.join(dir, 'eof')), 30000, 'the container saw end of input after the attaching process was killed');
     assert.equal(fs.readFileSync(path.join(dir, 'eof'), 'utf8'), `end of input ${nonce}`);
-    const logs = await docker(['logs', name]);
-    assert.notEqual(logs.code, 0, 'the runtime keeps no output of a --log-driver none container');
+    const info = JSON.parse((await docker(['container', 'inspect', name])).stdout)[0];
+    assert.equal(info.HostConfig.LogConfig.Type, 'none');
+    assert.equal(info.LogPath, '', 'the runtime keeps no log file of a --log-driver none container');
   });
 });
 

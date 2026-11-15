@@ -12,6 +12,13 @@ const KEY_ENV = 'ACODER_UPSTREAM_KEY';
 const CALL_TIMEOUT_MS = 120000;
 const ANSWER_TIMEOUT_MS = 20000;
 
+// The fields of `container inspect` the gate reads (H1 to H3), as one JSON object; Config.Env is reduced to the variable names. A Config field
+// the runtime leaves out is read with `index`, which gives null instead of a template error.
+export const CONTAINER_FORMAT = '{"Id":{{json .Id}},"State":{{json .State.Status}},"HostConfig":{{json .HostConfig}},"Mounts":{{json .Mounts}},'
+  + '"Networks":{{json .NetworkSettings.Networks}},"Path":{{json .Path}},"Args":{{json .Args}},"Config":{"User":{{json (index .Config "User")}},'
+  + '"Entrypoint":{{json (index .Config "Entrypoint")}},"Cmd":{{json (index .Config "Cmd")}},"WorkingDir":{{json (index .Config "WorkingDir")}},"Labels":{{json (index .Config "Labels")}},'
+  + '"Healthcheck":{{json (index .Config "Healthcheck")}},"EnvNames":[{{range $i, $e := .Config.Env}}{{if $i}},{{end}}{{json (index (split $e "=") 0)}}{{end}}]}}';
+
 const executable = file => {
   try { fs.accessSync(file, fs.constants.X_OK); return fs.statSync(file).isFile(); } catch { return false; }
 };
@@ -98,9 +105,13 @@ export function createRuntime({ name, bin, env, runId, deps = {} }) {
   }
 
   // `<kind> inspect <name>` for container, volume and network; the single parsed object, or null when it does not exist or is not one.
+  // A container is inspected through CONTAINER_FORMAT, which prints the environment NAMES only (A8.4, RA9b): the sidecar's configuration
+  // holds the key, and the launcher never reads a value back.
   async function inspect(kind, resource) {
-    const result = await call([kind, 'inspect', resource], { timeoutMs: ANSWER_TIMEOUT_MS });
+    const args = kind === 'container' ? [kind, 'inspect', '--format', CONTAINER_FORMAT, resource] : [kind, 'inspect', resource];
+    const result = await call(args, { timeoutMs: ANSWER_TIMEOUT_MS });
     const parsed = result.code === 0 ? json(result.stdout) : undefined;
+    if (kind === 'container') return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
     return Array.isArray(parsed) && parsed.length === 1 && parsed[0] !== null && typeof parsed[0] === 'object' ? parsed[0] : null;
   }
 

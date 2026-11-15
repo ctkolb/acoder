@@ -41,14 +41,14 @@ t('guard: usage errors are reported before the guard, and --dry-run, export mani
   assert.equal(parseJson(dry.stdout).tag, fx.tag);
 }));
 
-t('guard: with launchEnabled true the guard line is not printed (the guard is the constant); part 1 has no launch sequence', () => withFixture({}, async fx => {
+t('guard: with launchEnabled true the guard line is not printed (the guard is the constant); the launch goes on to state V, here refused for a PATH without a runtime', () => withFixture({}, async fx => {
   const before = listing(fx.base);
-  const result = await runMain(fx.argv({ drop: ['--dry-run'] }), { env: fx.env, deps: { launchEnabled: true } });
+  const result = await runMain(fx.argv({ drop: ['--dry-run'] }), { env: { ...fx.env, PATH: fx.base }, deps: { launchEnabled: true } });
   assert.equal(result.code, 2);
   assert.doesNotMatch(result.stderr, /incomplete; container launch is disabled/);
-  assert.match(result.stderr, /^refused: .*launch sequence/);
+  assert.equal(result.stderr, 'refused: no container runtime is installed: neither docker nor podman is on PATH\n');
   assert.equal(lastLine(result.stdout), `ACODER LAUNCH ${fx.tag} refused -`);
-  assert.deepEqual(listing(fx.base), before, 'part 1 creates nothing in the mailbox and leaves no staging directory');
+  assert.deepEqual(listing(fx.base), before, 'a refusal in state V creates nothing in the mailbox and leaves no staging directory');
 }));
 
 t('seams: the production command passes no test seam', () => {

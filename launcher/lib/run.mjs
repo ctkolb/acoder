@@ -1,11 +1,16 @@
 // runReview(options, deps): the run sequence of A6.6 on real containers. This part holds the launch plan and the payloads (A2.1, A2.2);
 // the sequence itself follows below.
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseEventLine, parseSupervisorLine } from './events.mjs';
 import { PLACEHOLDER_KEY, agentEnvNames, buildPlan, containerBaseUrl, endpointParts, hostsFile, resolvConf } from './plan.mjs';
-import { canonicalHash } from './record.mjs';
+import { checkImageAndRuntime, prepare } from './prepare.mjs';
+import { buildRecord, canonicalHash, makeRunId, preparedSections, recordNames, writeRecord } from './record.mjs';
+import { createRedactor, emptyScan, scanTree } from './redact.mjs';
+import { createRuntime, findRuntime } from './runtime.mjs';
+import { evaluateRun } from './state.mjs';
 
 export const LAUNCHER_VERSION = '0.1.0';
 const LAUNCHER_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -95,14 +100,607 @@ export function stagePayloads({ plan, prepared, options, sidecarProgram = null }
   return { agent: agentDir, egress: egressDir };
 }
 
-// The gate and the run sequence (red-commit placeholders; the implementation follows).
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// The gate checks H1 to H4 and U1, U2 (A3.6), as pure functions over `inspect` answers and events. Each returns {result, detail}.
+
+const ok = () => ({ result: 'pass', detail: null });
+const bad = detail => ({ result: 'fail', detail });
 export const CHECK_IDS = ['H1', 'H2', 'H3', 'H4', 'U1', 'U2', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8'];
-const placeholder = () => ({ result: 'pass', detail: null });
-export const checkH1 = placeholder;
-export const checkH2 = placeholder;
-export const checkH3 = placeholder;
-export const checkH4 = placeholder;
-export const checkU1 = placeholder;
-export const checkU2 = placeholder;
-export const corroborate = results => results;
-export async function runReview() { return { outcome: 'refused', exit_code: 2, record: '-', tag: '-', run_id: 'none', leftovers: [] }; }
+const sameSet = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === new Set(a).size && JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+
+// The planned tmpfs options by target, read from the create arguments.
+function tmpfsOptions(createArgs) {
+  const options = {};
+  createArgs.forEach((item, index) => { if (item === '--tmpfs') { const value = createArgs[index + 1]; options[value.slice(0, value.indexOf(':'))] = value.slice(value.indexOf(':') + 1); } });
+  return options;
+}
+
+const HOST_MNT = '/host_mnt';
+
+// The mounts of an inspected container in the shape of A9 (kind, source, target, mode), tmpfs options kept for H2.
+export function inspectedMounts(info, container, planMounts = []) {
+  const out = [];
+  for (const mount of Array.isArray(info?.Mounts) ? info.Mounts : []) {
+    const kind = mount.Type === 'volume' ? 'volume' : mount.Type === 'tmpfs' ? 'tmpfs' : 'bind';
+    const target = mount.Destination;
+    const planned = planMounts.find(entry => entry.container === container && entry.target === target);
+    // Docker Desktop reports a single-file bind over /etc/hosts or /etc/resolv.conf with its VM prefix /host_mnt before the host path.
+    const source = kind === 'volume' ? (mount.Name ?? null) : typeof mount.Source === 'string' && mount.Source.startsWith(`${HOST_MNT}/`) ? mount.Source.slice(HOST_MNT.length) : (mount.Source ?? null);
+    out.push({ container, target, source, kind, mode: mount.RW ? 'rw' : 'ro', persistent: kind === 'bind', role: planned?.role ?? (kind === 'volume' ? 'socket' : 'payload'), options: mount.Type === 'tmpfs' ? null : undefined });
+  }
+  for (const [target, options] of Object.entries(info?.HostConfig?.Tmpfs ?? {})) {
+    out.push({ container, target, source: null, kind: 'tmpfs', mode: 'rw', persistent: false, role: 'work', options });
+  }
+  return out;
+}
+
+function sameMounts(info, plan, container) {
+  const planned = plan.mounts.filter(mount => mount.container === container);
+  const options = tmpfsOptions(container === 'agent' ? plan.agent.create : plan.egress.create);
+  const key = mount => JSON.stringify([mount.target, mount.kind, mount.kind === 'tmpfs' ? null : mount.source, mount.mode, mount.kind === 'tmpfs' ? (mount.options ?? options[mount.target]) : null]);
+  const seen = inspectedMounts(info, container, plan.mounts).map(key).sort();
+  const wanted = planned.map(mount => key({ ...mount, options: options[mount.target] })).sort();
+  return JSON.stringify(seen) === JSON.stringify(wanted);
+}
+
+// The hardening both containers share (A2.1, A2.2): read-only root, all capabilities dropped, no-new-privileges and no seccomp setting,
+// not privileged, no host namespace, no device, no published port, log driver none.
+function hardening(info) {
+  const host = info.HostConfig ?? {};
+  const security = Array.isArray(host.SecurityOpt) ? host.SecurityOpt : [];
+  if (host.ReadonlyRootfs !== true) return 'root_writable';
+  if (!sameSet(host.CapDrop ?? [], ['ALL']) || (host.CapAdd ?? []).length > 0) return 'capabilities';
+  if (security.some(option => /seccomp|unconfined/i.test(option))) return 'seccomp_option';
+  if (!sameSet(security, ['no-new-privileges'])) return 'security_options';
+  if (host.Privileged !== false) return 'privileged';
+  if (host.PidMode === 'host' || host.IpcMode === 'host' || host.UTSMode === 'host' || (host.UsernsMode === 'host')) return 'host_namespace';
+  if ((host.Devices ?? []).length > 0 || (host.DeviceRequests ?? []).length > 0) return 'device';
+  if (Object.keys(host.PortBindings ?? {}).length > 0 || host.PublishAllPorts === true) return 'published_port';
+  if (host.LogConfig?.Type !== 'none') return 'log_driver';
+  if ((host.VolumesFrom ?? []).length > 0) return 'volumes_from';
+  return null;
+}
+
+const userOf = ids => `${ids.uid}:${ids.gid}`;
+
+export function checkH1(info) {
+  if (info === null) return bad('inspect_failed');
+  return info.HostConfig?.NetworkMode === 'none' && sameSet(Object.keys(info.Networks ?? {}), ['none']) ? ok() : bad('network');
+}
+
+export function checkH2(info, plan, ids) {
+  if (info === null) return bad('inspect_failed');
+  if (!sameMounts(info, plan, 'agent')) return bad('mounts');
+  const problem = hardening(info);
+  if (problem !== null) return bad(problem);
+  if (info.Config?.User !== userOf(ids)) return bad('user');
+  if (JSON.stringify(info.Config?.Entrypoint) !== '["node"]' || JSON.stringify(info.Config?.Cmd) !== '["/acoder/container/entry.mjs"]') return bad('entry_point');
+  if (!sameSet(info.Config?.EnvNames, plan.agent.env_names)) return bad('env_names');
+  if (info.HostConfig?.PidsLimit !== 512) return bad('pids_limit');
+  return ok();
+}
+
+export function checkH3(info, plan, ids, network) {
+  if (info === null) return bad('inspect_failed');
+  if (info.HostConfig?.NetworkMode !== network || !sameSet(Object.keys(info.Networks ?? {}), [network])) return bad('network');
+  if (!sameMounts(info, plan, 'egress')) return bad('mounts');
+  const problem = hardening(info);
+  if (problem !== null) return bad(problem);
+  if (info.Config?.User !== userOf(ids)) return bad('user');
+  if (JSON.stringify(info.Config?.Entrypoint) !== '["node"]' || JSON.stringify(info.Config?.Cmd) !== '["/acoder/container/proxy.mjs"]') return bad('entry_point');
+  if (!sameSet(info.Config?.EnvNames, plan.egress.env_names)) return bad('env_names');
+  if (info.HostConfig?.PidsLimit !== 128) return bad('pids_limit');
+  return ok();
+}
+
+// H4: the planned volume (driver, options, label); EXT carries the run label and has no container but the sidecar. An EXT given by the test
+// seam deps.egressNetwork is not the launcher's, so only its attachment is checked (detail egress_network_injected is recorded by the caller).
+export function checkH4(volume, network, plan, { networkCreated, sidecarId }) {
+  if (volume === null) return bad('volume_missing');
+  const uidgid = /uid=(\d+),gid=(\d+)/.exec(plan.volume.create.join(' '));
+  const wanted = { device: 'tmpfs', o: `size=1m,uid=${uidgid?.[1]},gid=${uidgid?.[2]},mode=0750`, type: 'tmpfs' };
+  if (volume.Driver !== 'local' || JSON.stringify(Object.fromEntries(Object.entries(volume.Options ?? {}).sort())) !== JSON.stringify(wanted)) return bad('volume_options');
+  if (volume.Labels?.['acoder.run'] !== plan.run_id) return bad('volume_label');
+  if (network === null) return bad('network_missing');
+  if (networkCreated && network.Labels?.['acoder.run'] !== plan.run_id) return bad('network_label');
+  const others = Object.keys(network.Containers ?? {}).filter(id => id !== sidecarId);
+  if (networkCreated && others.length > 0) return bad('network_shared');
+  return ok();
+}
+
+// U1 (with D-R32): the ready event's configuration hash and variable names, the phase from the first probe answer (the first local request
+// event: phase probe), and both clock samples inside their brackets (A3.6: bracket 0 to 10000 ms, sample within it widened by 1000 ms).
+export function checkU1({ ready, readyCount, firstLocal, clocks }, { configSha256, envNames, allowance }) {
+  if (readyCount !== 1 || ready === null) return bad('ready_missing');
+  if (ready.config_sha256 !== configSha256) return bad('config_hash');
+  const allowed = new Set([...envNames, ...allowance]);
+  if (!envNames.every(name => ready.env_names.includes(name)) || !ready.env_names.every(name => allowed.has(name))) return bad('env_names');
+  if (firstLocal === null || firstLocal.phase !== 'probe') return bad('phase');
+  for (const clock of clocks) {
+    if (clock === null || clock.sample === null) return bad('clock_protocol');
+    const length = clock.end - clock.start;
+    if (length < 0 || length > 10000 || clock.sample < clock.start - 1000 || clock.sample > clock.end + 1000) return bad('clock_skew');
+  }
+  return ok();
+}
+
+export function checkU2(upstreams, host) {
+  if (upstreams.length !== 1) return bad(upstreams.length === 0 ? 'upstream_missing' : 'upstream_duplicate');
+  const [event] = upstreams;
+  return event.host === host && event.handshake === 'ok' && event.address !== null ? ok() : bad('handshake');
+}
+
+// P4 and P5 are corroborated by the sidecar's own request events (A3.6): the probe value, phase probe, the decisions and reasons, and no
+// forwarded request at all.
+export function corroborate(results, requests, nonce) {
+  const mine = requests.filter(event => event.probe === nonce && event.phase === 'probe');
+  const has = (decision, reason) => mine.some(event => event.decision === decision && event.reason === reason);
+  const forwarded = requests.some(event => event.decision === 'forwarded');
+  return results.map(entry => {
+    if (entry.result !== 'pass') return entry;
+    if (entry.id === 'P4' && !(has('refused', 'acoder_host_not_allowed') && has('refused', 'acoder_path_not_allowed'))) return { ...entry, result: 'fail', detail: 'not_corroborated' };
+    if (entry.id === 'P5' && (forwarded || !(mine.some(event => event.decision === 'local' && event.status === 200) && has('refused', 'acoder_not_released')))) return { ...entry, result: 'fail', detail: 'not_corroborated' };
+    return entry;
+  });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// The run sequence (A6.6): V validate (runtime, image), S snapshot, E2 mailbox effects, E3 runtime resources, G gate, R release, A agent
+// runs, T stop, C scan and evaluate, F finalize. Test seams (deps; none is reachable from a flag, an environment variable or a file):
+// adapters, providers, home, runtime (a function that wraps the runtime wrapper), planTransform, egressNetwork, hooks {afterSnapshot,
+// beforeRelease, afterStop}, sidecarProgram, clock {now, gateMs}.
+
+export const GATE_MS = 90000;
+const RELEASE_LEAD_MS = 5000;
+const SUMMARY_WAIT_MS = 10000;
+const STOP_GRACE_SECONDS = 10;
+const CLOCK_WAIT_MS = 10000;
+const KEY_ENV = 'ACODER_UPSTREAM_KEY';
+const STAGING_ATTEMPTS = 30;
+const STAGING_RETRY_MS = 500;
+
+// One state boundary failure: `state` is the A6.6 state that failed; `detail` the error detail of a not-started record.
+class Boundary extends Error {
+  constructor(state, detail, cause = null) {
+    super(`${state}: ${detail}`);
+    this.state = state;
+    this.detail = detail;
+    this.cause = cause;
+  }
+}
+
+// A notifier: until(predicate, ms) resolves true once the predicate holds after a notify, false when ms passed first.
+function notifier() {
+  const waiting = new Set();
+  return {
+    notify: () => { for (const check of [...waiting]) check(); },
+    until: (predicate, ms) => new Promise(resolve => {
+      if (predicate()) { resolve(true); return; }
+      const check = () => { if (predicate()) { waiting.delete(check); clearTimeout(timer); resolve(true); } };
+      const timer = setTimeout(() => { waiting.delete(check); resolve(predicate()); }, Math.max(0, ms));
+      waiting.add(check);
+    }),
+  };
+}
+
+// The lines of a stream, one call per complete line.
+function eachLine(stream, onLine) {
+  let pending = '';
+  stream.setEncoding('utf8');
+  stream.on('data', text => {
+    pending += text;
+    for (let newline = pending.indexOf('\n'); newline >= 0; newline = pending.indexOf('\n')) {
+      onLine(pending.slice(0, newline));
+      pending = pending.slice(newline + 1);
+    }
+  });
+  stream.on('end', () => { if (pending !== '') onLine(pending); pending = ''; });
+}
+
+// An attached container: its standard input is the control channel, its standard output the event lines (A3.5).
+function attachTo(runtime, name, { onLine, onError, changed }) {
+  const child = runtime.attach(name);
+  const state = { exit: null };
+  eachLine(child.stdout, onLine);
+  eachLine(child.stderr, onError);
+  child.stdin.on('error', () => {});
+  const exited = new Promise(resolve => {
+    child.on('error', () => { state.exit ??= { code: null, signal: null }; changed(); resolve(state.exit); });
+    child.on('close', (code, signal) => { state.exit ??= { code, signal }; changed(); resolve(state.exit); });
+  });
+  return {
+    child, exited, state,
+    write: line => { if (child.stdin.writable) child.stdin.write(`${line}\n`); },
+    end: () => { try { child.stdin.end(); } catch { /* closed */ } },
+  };
+}
+
+function withoutKey(env, keyName) {
+  const copy = { ...env };
+  delete copy[keyName];
+  delete copy[KEY_ENV];
+  return copy;
+}
+
+const nowIso = ms => new Date(ms).toISOString();
+const hex = bytes => randomBytes(bytes).toString('hex');
+
+function lstatOrNull(file) { try { return fs.lstatSync(file); } catch { return null; } }
+
+// A9 reports: regular files read with no-follow.
+function reportFacts(writable, tag) {
+  const read = file => {
+    const info = lstatOrNull(file);
+    if (info === null || !info.isFile()) return { exists: false, bytes: 0, sha256: null, text: null };
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    try { const data = fs.readFileSync(fd); return { exists: true, bytes: data.length, sha256: createHash('sha256').update(data).digest('hex'), text: data.toString('utf8') }; } finally { fs.closeSync(fd); }
+  };
+  const md = read(writable.reportMd);
+  const json = read(writable.reportJson);
+  let parsed = null;
+  try { parsed = json.text === null ? null : JSON.parse(json.text); } catch { parsed = null; }
+  const parses = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+  return {
+    md: { path: writable.reportMd, exists: md.exists, bytes: md.bytes, sha256: md.sha256 },
+    json: { path: writable.reportJson, exists: json.exists, bytes: json.bytes, sha256: json.sha256, parses, session_matches: parses && parsed.session === tag },
+  };
+}
+
+export async function runReview({ options, settings, env }, deps = {}) {
+  const adapters = deps.adapters;
+  const providers = deps.providers;
+  const now = deps.clock?.now ?? Date.now;
+  const gateMs = deps.clock?.gateMs ?? GATE_MS;
+  const hooks = deps.hooks ?? {};
+  const transform = deps.planTransform ?? (plan => plan);
+  const launched = now();
+  const started = process.hrtime.bigint();
+  const elapsedSeconds = () => Number(process.hrtime.bigint() - started) / 1e9;
+
+  // V: the runtime and the image (A10.3, A8.4). The run id labels every resource from here on.
+  const runId = makeRunId();
+  const hostEnv = withoutKey(env, options.apiKeyEnv);
+  let runtime = createRuntime({ ...findRuntime(options.runtime, hostEnv), env: hostEnv, runId });
+  if (typeof deps.runtime === 'function') runtime = deps.runtime(runtime);
+  const checked = await checkImageAndRuntime(options, runtime);
+
+  // S: staging, snapshot and verification (refusals remove the staging directory themselves).
+  const prepared = prepare(options, env, { home: deps.home, afterSnapshot: hooks.afterSnapshot });
+  const { tag } = prepared;
+  const writable = { ...prepared.writable, startedRecord: path.join(prepared.writable.stage, `run-${prepared.tag}.started.json`) };
+  const key = env[options.apiKeyEnv];
+  const redactor = createRedactor(key);
+  const ids = { uid: process.getuid(), gid: process.getgid() };
+  const names = { agent: `acoder-agent-${runId}`, egress: `acoder-sidecar-${runId}`, volume: `acoder-egress-${runId}`, network: deps.egressNetwork ?? `acoder-ext-${runId}` };
+
+  const ctx = {
+    runId, tag, prepared, checked, plan: null, basePlan: null, checks: Object.fromEntries(CHECK_IDS.map(id => [id, { result: 'not_run', detail: 'not_reached' }])),
+    mounts: [], requests: [], sidecarEvents: [], supervisorEvents: [], summary: null, created: { volume: false, network: false, egress: false, agent: false },
+    agentStarted: false, released: null, startedFile: false, logRedactions: 0, conditions: new Set(), budgetKinds: [], agentExit: { code: null, signal: null, outcome: null },
+    reportInodes: {}, parser: adapters[settings.agent].createParser(),
+  };
+  let log = null;
+  const logLine = (source, line) => {
+    if (log === null) return;
+    const { text, count } = redactor.redactString(`${nowIso(now())} ${source} ${line}\n`);
+    ctx.logRedactions += count;
+    try { fs.writeSync(log, text); } catch { /* the log is best effort; the record says what happened */ }
+  };
+
+  let sidecar = null;
+  let supervisor = null;
+  const changed = notifier();
+  try {
+    // E2: the mailbox effects (A2.3.4) and the log.
+    try {
+      fs.mkdirSync(writable.scratch, { mode: 0o700 });
+      for (const [label, file] of [['md', writable.reportMd], ['json', writable.reportJson]]) {
+        fs.writeFileSync(file, '', { flag: 'wx', mode: 0o600 });
+        const info = fs.lstatSync(file);
+        if (!info.isFile() || info.nlink !== 1) throw new Error('a report file is not a new regular file');
+        ctx.reportInodes[label] = info.ino;
+      }
+      ctx.logPath = recordNames({ stageDir: writable.stage, tag, runId, started: false }).log;
+      log = fs.openSync(ctx.logPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+    } catch (error) { throw new Boundary('E2', 'runtime_failure', error); }
+    logLine('launcher', `run ${runId} tag ${tag}`);
+
+    // E3: payloads, volume, network EXT, the sidecar (created, checked by H3 and H4, started), the agent container (created, checked by H1, H2).
+    const eventPrefix = hex(16);
+    const nonce = hex(16);
+    const planArgs = { options, settings, prepared, adapters, providers, image: checked.image, runtimeName: runtime.name, runId, eventPrefix, nonce, uid: ids.uid, gid: ids.gid };
+    const gateEnds = () => Math.max(0, ctx.gateDeadline - now());
+    try {
+      ctx.basePlan = planFor(planArgs);
+      ctx.plan = transform(structuredClone(ctx.basePlan));
+      stagePayloads({ plan: ctx.plan, prepared, options, sidecarProgram: deps.sidecarProgram ?? null });
+      const must = async (args, extra = {}) => {
+        const result = await runtime.call(args, extra);
+        if (result.code !== 0) throw new Error(`the runtime refused ${args.slice(0, 2).join(' ')}`);
+        return result;
+      };
+      await must(ctx.plan.volume.create);
+      ctx.created.volume = true;
+      if (deps.egressNetwork === undefined) { await must(ctx.plan.network.create); ctx.created.network = true; }
+      const egressCreate = deps.egressNetwork === undefined ? ctx.plan.egress.create : ctx.plan.egress.create.map(item => (item === ctx.plan.network.name ? deps.egressNetwork : item));
+      const sidecarId = (await must(egressCreate, { extraEnv: { [KEY_ENV]: key } })).stdout.trim();
+      ctx.created.egress = true;
+      const egressInfo = await runtime.inspect('container', names.egress);
+      ctx.mounts.push(...inspectedMounts(egressInfo, 'egress', ctx.basePlan.mounts));
+      ctx.checks.H3 = checkH3(egressInfo, deps.egressNetwork === undefined ? ctx.basePlan : { ...ctx.basePlan }, ids, names.network);
+      ctx.checks.H4 = checkH4(await runtime.inspect('volume', names.volume), await runtime.inspect('network', names.network), ctx.basePlan, { networkCreated: ctx.created.network, sidecarId });
+      if (ctx.checks.H3.result !== 'pass' || ctx.checks.H4.result !== 'pass') throw new Boundary('G', 'gate_failed');
+
+      ctx.gateDeadline = now() + gateMs;
+      sidecar = attachTo(runtime, names.egress, {
+        changed: changed.notify,
+        onError: line => logLine('sidecar-stderr', line),
+        onLine: line => {
+          logLine('sidecar', line);
+          const parsed = parseEventLine('sidecar', line, { allowlist: ctx.plan.allowlist });
+          if (!parsed.ok) { ctx.sidecarInvalid = true; changed.notify(); return; }
+          ctx.sidecarEvents.push(parsed.event);
+          if (parsed.event.event === 'request') ctx.requests.push(parsed.event);
+          if (parsed.event.event === 'summary') ctx.summary = parsed.event;
+          if (parsed.event.event === 'limit' && !ctx.budgetKinds.includes(parsed.event.kind)) ctx.limitEvent = parsed.event.kind;
+          changed.notify();
+        },
+      });
+      const sidecarOf = kind => ctx.sidecarEvents.filter(event => event.event === kind);
+      await changed.until(() => sidecarOf('ready').length > 0 && sidecarOf('upstream').length > 0, gateEnds());
+      const upstream = sidecarOf('upstream')[0] ?? null;
+      const running = await runtime.inspect('container', names.egress);
+      const sidecarAddress = running?.Networks?.[names.network]?.IPAddress ?? null;
+      const network = await runtime.inspect('network', names.network);
+      const gateway = network?.IPAM?.Config?.find(entry => typeof entry?.Gateway === 'string')?.Gateway ?? null;
+      const p6 = [
+        ...(upstream?.address ? [{ address: upstream.address, port: 443 }] : []),
+        ...[gateway, sidecarAddress].filter(address => typeof address === 'string' && address !== '').flatMap(address => [53, 80, 443].map(port => ({ address, port }))),
+      ];
+      ctx.basePlan = planFor({ ...planArgs, p6 });
+      ctx.plan = transform(structuredClone(ctx.basePlan));
+      await must(ctx.plan.agent.create);
+      ctx.created.agent = true;
+      const agentInfo = await runtime.inspect('container', names.agent);
+      ctx.mounts.unshift(...inspectedMounts(agentInfo, 'agent', ctx.basePlan.mounts));
+      ctx.checks.H1 = checkH1(agentInfo);
+      ctx.checks.H2 = checkH2(agentInfo, ctx.basePlan, ids);
+      if (ctx.checks.H1.result !== 'pass' || ctx.checks.H2.result !== 'pass') throw new Boundary('G', 'gate_failed');
+    } catch (error) {
+      if (error instanceof Boundary) throw error;
+      throw new Boundary('E3', 'runtime_failure', error);
+    }
+
+    // G: the agent container's supervisor runs the probes; the launcher corroborates them and brackets one clock sample of each container.
+    supervisor = attachTo(runtime, names.agent, {
+      changed: changed.notify,
+      onError: line => logLine('agent-stderr', line),
+      onLine: line => {
+        const parsed = parseSupervisorLine(line, { prefix: eventPrefix, agentStarted: ctx.agentStarted });
+        if (parsed.kind === 'event') {
+          logLine('supervisor', JSON.stringify(parsed.event));
+          ctx.supervisorEvents.push(parsed.event);
+          if (parsed.event.event === 'agent_started') ctx.agentStarted = true;
+        } else if (parsed.kind === 'invalid') { logLine('supervisor', 'invalid event line'); ctx.supervisorInvalid = true; }
+        else { logLine('agent', line); if (ctx.agentStarted) ctx.parser.push(line); }
+        changed.notify();
+      },
+    });
+    const sup = kind => ctx.supervisorEvents.filter(event => event.event === kind);
+    const side = kind => ctx.sidecarEvents.filter(event => event.event === kind);
+    // The supervisor's probes make four requests; their events are awaited whatever they say (corroborate() matches them to the nonce).
+    await changed.until(() => sup('probes').length > 0 && side('ready').length > 0 && side('upstream').length > 0 && ctx.requests.length >= 4, gateEnds());
+    const clocks = [];
+    for (const [channel, events] of [[sidecar, side], [supervisor, sup]]) {
+      if (now() >= ctx.gateDeadline || channel.state.exit !== null) { clocks.push(null); continue; }
+      const start = now();
+      channel.write('CLOCK');
+      const got = await changed.until(() => events('clock').length > 0, Math.min(CLOCK_WAIT_MS, gateEnds()));
+      const end = now();
+      clocks.push(got && events('clock').length === 1 ? { start, end, sample: events('clock')[0].clock_epoch_ms } : null);
+    }
+    // A late, duplicated or malformed event fails its check (A3.6).
+    await changed.until(() => false, 200);
+    const inTime = now() <= ctx.gateDeadline;
+    const firstLocal = ctx.requests.find(event => event.decision === 'local') ?? null;
+    ctx.checks.U1 = !inTime || ctx.sidecarInvalid ? bad('protocol') : checkU1(
+      { ready: side('ready')[0] ?? null, readyCount: side('ready').length, firstLocal, clocks: side('clock').length > 1 || sup('clock').length > 1 ? [null] : clocks },
+      { configSha256: createHash('sha256').update(ctx.plan.payload_files.egress['egress.json']).digest('hex'), envNames: ctx.basePlan.egress.env_names, allowance: INJECTED_ENV[runtime.name] },
+    );
+    ctx.checks.U2 = !inTime ? bad('late') : checkU2(side('upstream'), ctx.basePlan.allowlist[0]);
+    const probes = sup('probes');
+    const results = probes.length === 1 && !ctx.supervisorInvalid && inTime ? corroborate(probes[0].results, ctx.requests, nonce) : [];
+    for (const id of CHECK_IDS.filter(name => name.startsWith('P'))) {
+      const found = results.filter(entry => entry.id === id);
+      ctx.checks[id] = found.length === 1 ? { result: found[0].result, detail: found[0].detail } : bad(probes.length === 0 ? 'probes_missing' : 'protocol');
+    }
+    if (CHECK_IDS.some(id => ctx.checks[id].result !== 'pass')) throw new Boundary('G', 'gate_failed');
+
+    // R: release instant T five seconds ahead; one absolute deadline; PHASE agent acknowledged, the started file, then RELEASE at T.
+    const releaseAt = now() + RELEASE_LEAD_MS;
+    const deadline = releaseAt + settings.limits.wall_seconds * 1000;
+    sidecar.write(`PHASE agent ${deadline}`);
+    const phased = await changed.until(() => side('phase').length > 0, releaseAt - now());
+    if (!phased) throw new Boundary('R', 'runtime_failure');
+    try {
+      const fd = fs.openSync(writable.startedRecord, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o644);
+      try {
+        fs.writeSync(fd, `${JSON.stringify({
+          format: 'acoder-run-started/1', run_id: runId, tag, ticket_sha256: prepared.ticket.sha256, time: nowIso(now()),
+          resources: { agent: names.agent, egress: names.egress, volume: names.volume, network: names.network, staging: prepared.staging.dir },
+        }, null, 2)}\n`);
+        fs.fsyncSync(fd);
+      } finally { fs.closeSync(fd); }
+      ctx.startedFile = true;
+    } catch (error) { throw new Boundary('R', 'runtime_failure', error); }
+    await hooks.beforeRelease?.({ runId, names, endAgentInput: () => supervisor.end(), endSidecarInput: () => sidecar.end() });
+    if (now() > releaseAt) throw new Boundary('R', 'runtime_failure');
+    await new Promise(resolve => setTimeout(resolve, Math.max(0, releaseAt - now())));
+    supervisor.write(`RELEASE ${runId} ${deadline}`);
+    ctx.released = now();
+    const releasedMono = process.hrtime.bigint();
+    logLine('launcher', 'released');
+
+    // A: the agent runs until it ends, the wall clock fires, a limit is reported, or the sidecar ends (A6.5, A3.7).
+    const wallMs = settings.limits.wall_seconds * 1000;
+    const wallLeft = () => wallMs - Number(process.hrtime.bigint() - releasedMono) / 1e6;
+    await changed.until(() => supervisor.state.exit !== null || sidecar.state.exit !== null || ctx.limitEvent !== undefined || wallLeft() <= 0, wallMs + 1000);
+    // T: with a live sidecar, STOP first and await its summary before the agent container is signalled.
+    if (supervisor.state.exit === null && sidecar.state.exit !== null && ctx.summary === null) {
+      ctx.conditions.add('egress_sidecar_exited');
+      await runtime.call(['kill', names.agent]);
+    } else {
+      if (ctx.limitEvent !== undefined) ctx.budgetKinds.push(ctx.limitEvent);
+      else if (supervisor.state.exit === null && wallLeft() <= 0) ctx.budgetKinds.push('wall_clock');
+      sidecar.write('STOP');
+      const summarized = await changed.until(() => ctx.summary !== null, SUMMARY_WAIT_MS);
+      if (!summarized) { ctx.conditions.add('egress_protocol_error'); await runtime.call(['kill', names.egress]); }
+      if (supervisor.state.exit === null) await runtime.call(['stop', '--time', String(STOP_GRACE_SECONDS), names.agent], { timeoutMs: (STOP_GRACE_SECONDS + 20) * 1000 });
+    }
+    const agentExit = await Promise.race([supervisor.exited, new Promise(resolve => setTimeout(() => resolve({ code: null, signal: null }), 30000))]);
+    await Promise.race([sidecar.exited, new Promise(resolve => setTimeout(resolve, 15000))]);
+    await hooks.afterStop?.({ runId, names });
+    const parsed = ctx.parser.result();
+    const code = agentExit.code;
+    ctx.agentExit = { code, signal: null, outcome: adapters[settings.agent].outcome({ code, signal: null, parsed }) };
+    ctx.advisory = { ...parsed.advisory, counted_by: `adapter:${settings.agent}` };
+    ctx.agentStarted = sup('agent_started').length > 0 || ctx.agentStarted;
+    return await finishStarted(ctx, { runtime, names, options, settings, writable, redactor, key, now, launched, elapsedSeconds, log, closeLog: () => { if (log !== null) { fs.closeSync(log); log = null; } } });
+  } catch (error) {
+    const boundary = error instanceof Boundary ? error : new Boundary(ctx.startedFile ? 'R' : 'E3', 'runtime_failure', error);
+    if (ctx.startedFile) {
+      ctx.conditions.add('runtime_failure');
+      logLine('launcher', `failure after the started file: ${boundary.detail}`);
+      supervisor?.end();
+      sidecar?.end();
+      return await finishStarted(ctx, { runtime, names, options, settings, writable, redactor, key, now, launched, elapsedSeconds, log, closeLog: () => { if (log !== null) { fs.closeSync(log); log = null; } } });
+    }
+    logLine('launcher', `not started: ${boundary.state} ${boundary.detail}`);
+    supervisor?.end();
+    sidecar?.end();
+    if (log !== null) { fs.closeSync(log); log = null; }
+    return finishNotStarted(ctx, boundary, { runtime, names, options, settings, writable, redactor, now, launched, elapsedSeconds, sidecar, supervisor });
+  }
+}
+
+const zeroTotals = () => ({ forwarded: 0, refused_probe: 0, refused_agent: 0, refused_by_reason: {}, bytes_up: 0, bytes_down: 0, key_reflections: 0 });
+function totalsFrom(ctx) {
+  if (ctx.summary !== null) {
+    const { forwarded, refused_probe: refusedProbe, refused_agent: refusedAgent, refused_by_reason: byReason, bytes_up: up, bytes_down: down, key_reflections: reflections } = ctx.summary;
+    return { forwarded, refused_probe: refusedProbe, refused_agent: refusedAgent, refused_by_reason: { ...byReason }, bytes_up: up, bytes_down: down, key_reflections: reflections };
+  }
+  const totals = zeroTotals();
+  for (const event of ctx.requests) {
+    if (event.decision === 'forwarded') totals.forwarded += 1;
+    if (event.decision === 'refused') {
+      totals[event.phase === 'probe' ? 'refused_probe' : 'refused_agent'] += 1;
+      totals.refused_by_reason[event.reason] = (totals.refused_by_reason[event.reason] ?? 0) + 1;
+    }
+    totals.bytes_up += event.bytes_up;
+    totals.bytes_down += event.bytes_down;
+  }
+  return totals;
+}
+
+// A6.7: containers, volume, network, staging; the names that remain.
+async function cleanupRun(ctx, runtime, names) {
+  const leftovers = await runtime.remove({
+    containers: [ctx.created.agent ? names.agent : null, ctx.created.egress ? names.egress : null].filter(Boolean),
+    volume: ctx.created.volume ? names.volume : null, network: ctx.created.network ? names.network : null,
+  }).catch(() => [names.agent, names.egress, names.volume, names.network]);
+  // Docker Desktop releases a nested mount point of the snapshot a moment after the container is gone (ENOTEMPTY until then): the
+  // removal is retried for a bounded time, and what still remains is named in the record.
+  for (let attempt = 1; ; attempt += 1) {
+    try { ctx.prepared.cleanup(); break; } catch {
+      if (attempt >= STAGING_ATTEMPTS) { leftovers.push(ctx.prepared.staging.dir); break; }
+      await new Promise(resolve => setTimeout(resolve, STAGING_RETRY_MS));
+    }
+  }
+  return leftovers;
+}
+
+function recordValuesOf(ctx, { options, settings, writable, now, launched, elapsedSeconds, names }) {
+  const { prepared, checked } = ctx;
+  const payload = dir => { try { return canonicalHash(dir); } catch { return '0'.repeat(64); } };
+  const totals = totalsFrom(ctx);
+  return {
+    run_id: ctx.runId, tag: ctx.tag,
+    launcher: {
+      version: LAUNCHER_VERSION, agent_payload_sha256: payload(path.join(prepared.staging.dir, 'agent-payload')), egress_payload_sha256: payload(path.join(prepared.staging.dir, 'egress-payload')),
+      skill_sha256: payload(prepared.staging.skill),
+    },
+    agent: { name: settings.agent, cli_version: null, model: settings.model, effort: settings.effort },
+    provider: { id: settings.provider, endpoint: settings.endpoint, max_in_flight: settings.limits.max_in_flight },
+    ...preparedSections(prepared, options),
+    image: checked.image, runtime: checked.runtime,
+    mounts: ctx.mounts.map(({ options: unused, ...mount }) => mount), plan_mounts: ctx.basePlan?.mounts ?? [],
+    network: {
+      agent_network: 'none', egress_network: names.network, egress_network_created: ctx.created.network, allowlist: ctx.basePlan?.allowlist ?? [endpointParts(settings.endpoint).host],
+      extra_ca_cert: options.extraCaCert !== null,
+    },
+    isolation_checks: CHECK_IDS.map(id => ({ id, ...ctx.checks[id] })),
+    egress_log: ctx.requests.map(({ event: unusedEvent, probe: unusedProbe, ...entry }) => entry),
+    egress_log_truncated: false, egress_totals: totals,
+    limits: { wall_seconds: settings.limits.wall_seconds, calls: settings.limits.calls, tokens: settings.limits.tokens, scratch_max_bytes: settings.limits.scratch_max_bytes },
+    usage: {
+      calls_forwarded: totals.forwarded, tokens: ctx.summary?.tokens ?? null, usage_missing: ctx.summary?.usage_missing ?? 0, admitted_after_token_limit: ctx.summary?.admitted_after_token_limit ?? 0,
+      in_flight_at_limit: ctx.summary?.in_flight_at_limit ?? null, counted_by: 'egress', advisory: ctx.advisory ?? null,
+    },
+    times: { launched: nowIso(launched), released: ctx.released === null ? null : nowIso(ctx.released), ended: nowIso(now()), wall_seconds: Math.round(elapsedSeconds() * 1000) / 1000 },
+    agent_exit: ctx.agentExit, reports: reportFacts(writable, ctx.tag), scratch_symlinks_outside: 0,
+  };
+}
+
+function removeEmptyReports(ctx, writable, onlyOwn) {
+  const leftovers = [];
+  for (const [label, file] of [['md', writable.reportMd], ['json', writable.reportJson]]) {
+    const info = lstatOrNull(file);
+    if (info?.isFile() && info.size === 0 && (!onlyOwn || info.ino === ctx.reportInodes[label])) { try { fs.rmSync(file); } catch { leftovers.push(file); } }
+  }
+  return leftovers;
+}
+
+// A not-started attempt (states E2 to R before the started file): containers and resources removed, empty reports and the empty scratch
+// directory removed, the not-started record and log kept (A6.6). Exit code 1, outcome not-started.
+async function finishNotStarted(ctx, boundary, { runtime, names, options, settings, writable, redactor, now, launched, elapsedSeconds, sidecar, supervisor }) {
+  await Promise.race([Promise.all([sidecar?.exited, supervisor?.exited].filter(Boolean)), new Promise(resolve => setTimeout(resolve, 15000))]);
+  const leftovers = await cleanupRun(ctx, runtime, names);
+  leftovers.push(...removeEmptyReports(ctx, writable, true));
+  try { if (lstatOrNull(writable.scratch)?.isDirectory()) fs.rmdirSync(writable.scratch); } catch { leftovers.push(writable.scratch); }
+  if (ctx.logPath === undefined) {
+    return { outcome: 'not-started', exit_code: 1, record: '-', tag: ctx.tag, run_id: ctx.runId, leftovers, state: boundary.state, detail: boundary.detail };
+  }
+  const values = {
+    ...recordValuesOf(ctx, { options, settings, writable, now, launched, elapsedSeconds, names }),
+    agent_started: false, exit_reason: null, budget_kind: null, error_detail: boundary.detail, conditions: [], secret_scan: emptyScan(),
+    cleanup: { status: leftovers.length === 0 ? 'complete' : 'incomplete', leftovers }, log_path: ctx.logPath,
+  };
+  values.reports = reportFacts(writable, ctx.tag);
+  values.secret_scan.log_redactions = ctx.logRedactions;
+  const file = recordNames({ stageDir: writable.stage, tag: ctx.tag, runId: ctx.runId, started: false }).record;
+  writeRecord(file, buildRecord(values), redactor);
+  return { outcome: 'not-started', exit_code: 1, record: file, tag: ctx.tag, run_id: ctx.runId, leftovers, state: boundary.state, detail: boundary.detail };
+}
+
+// A started run: C scan and evaluate, F record, cleanup (A6.6). The post-run scan, budgets and the full stop sequence are completed in
+// part 2 of S4.
+async function finishStarted(ctx, { runtime, names, options, settings, writable, redactor, key, now, launched, elapsedSeconds, closeLog }) {
+  const leftovers = await cleanupRun(ctx, runtime, names);
+  leftovers.push(...removeEmptyReports(ctx, writable, false));
+  const recordPaths = recordNames({ stageDir: writable.stage, tag: ctx.tag, runId: ctx.runId, started: true });
+  closeLog();
+  try { fs.renameSync(ctx.logPath, recordPaths.log); } catch { /* the not-started name stays */ }
+  const logPath = lstatOrNull(recordPaths.log) === null ? ctx.logPath : recordPaths.log;
+  const scan = scanTree({ key, scratch: writable.scratch, files: [writable.reportMd, writable.reportJson, logPath] });
+  const values = recordValuesOf(ctx, { options, settings, writable, now, launched, elapsedSeconds, names });
+  const decision = evaluateRun({
+    flags: [...ctx.conditions], budgetKinds: ctx.budgetKinds, tokensLowerBound: (ctx.summary?.usage_missing ?? 0) > 0, scan_status: scan.status,
+    agent: ctx.agentStarted ? ctx.agentExit : null, egress_log: values.egress_log, reports: values.reports,
+  });
+  const record = buildRecord({
+    ...values, agent_started: ctx.agentStarted, exit_reason: decision.exit_reason, budget_kind: decision.budget_kind, error_detail: decision.error_detail, conditions: decision.conditions,
+    secret_scan: { ...scan.secret_scan, log_redactions: ctx.logRedactions }, cleanup: { status: leftovers.length === 0 ? 'complete' : 'incomplete', leftovers }, log_path: logPath,
+  });
+  writeRecord(recordPaths.record, record, redactor);
+  return { outcome: decision.outcome, exit_code: decision.exit_code, record: recordPaths.record, tag: ctx.tag, run_id: ctx.runId, leftovers };
+}
