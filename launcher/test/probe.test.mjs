@@ -8,7 +8,7 @@ import path from 'node:path';
 import nodeTest from 'node:test';
 import { evaluateP1, probeP2, probeP3, probeP4P5, probeP6, probeP7, probeP8, readP1Sources } from '../container/probe.mjs';
 import { CODE_PATTERN } from '../lib/events.mjs';
-import { fixtureBase, forceRemove, mustAsync } from './helpers/fixtures.mjs';
+import { fixtureBase, forceRemove, must, mustAsync } from './helpers/fixtures.mjs';
 
 // G11: every test has a finite time limit of its own and is registered from this file. No probe here contacts anything but the
 // loopback address: every lookup is injected.
@@ -42,7 +42,7 @@ const V6 = (dev, dest = '0'.repeat(32), len = '00') => `${dest} ${len} ${'0'.rep
 const IPV6_ROUTE = `${V6('lo')}${V6('lo', `${'0'.repeat(31)}1`, '80')}${V6('lo')}`;
 const healthy = (over = {}) => ({ devices: DEVICES, if_inet6: IF_INET6, fib_trie: FIB, route: ROUTE, ipv6_route: IPV6_ROUTE, ...over });
 const p1 = sources => {
-  const result = evaluateP1(sources);
+  const result = must(() => evaluateP1(sources));
   assert.ok(result !== null && typeof result === 'object', 'P1 evaluates to a result');
   if (result.detail !== null) assert.match(String(result.detail), CODE_PATTERN, 'the detail is a fixed code');
   return result;

@@ -94,3 +94,15 @@ export function stagePayloads({ plan, prepared, options, sidecarProgram = null }
   fs.chmodSync(agentDir, 0o555);
   return { agent: agentDir, egress: egressDir };
 }
+
+// The gate and the run sequence (red-commit placeholders; the implementation follows).
+export const CHECK_IDS = ['H1', 'H2', 'H3', 'H4', 'U1', 'U2', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8'];
+const placeholder = () => ({ result: 'pass', detail: null });
+export const checkH1 = placeholder;
+export const checkH2 = placeholder;
+export const checkH3 = placeholder;
+export const checkH4 = placeholder;
+export const checkU1 = placeholder;
+export const checkU2 = placeholder;
+export const corroborate = results => results;
+export async function runReview() { return { outcome: 'refused', exit_code: 2, record: '-', tag: '-', run_id: 'none', leftovers: [] }; }
