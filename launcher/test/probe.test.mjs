@@ -99,7 +99,7 @@ t('p1-sources: each unparseable source fails (source_unparseable)', () => {
     { fib_trie: `${FIB}garbage here\n` },
     { fib_trie: 'Main:\n        /32 host LOCAL\n' },
     { route: 'eth0\t00000000\n' },
-    { route: `${ROUTE}\n` },
+    { route: `${ROUTE}eth0\n` },
     { ipv6_route: 'short line lo\n' },
   ];
   for (const over of cases) assert.deepEqual(p1(healthy(over)), { result: 'fail', detail: 'source_unparseable' }, JSON.stringify(over).slice(0, 80));

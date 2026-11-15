@@ -104,7 +104,8 @@ t('supervisor: the agent gets the constructed environment (the planned names onl
     send(`RELEASE ${RUN_ID} ${Date.now() + 60000}`);
     await until(() => marker() !== null, 10000, 'the agent marker');
     const agent = marker();
-    assert.deepEqual(agent.env_names, ENV_NAMES, 'exactly the planned names; nothing else is inherited');
+    // macOS adds __CF_USER_TEXT_ENCODING to the environment of every program it starts; a Linux container has no such name.
+    assert.deepEqual(agent.env_names.filter(name => name !== '__CF_USER_TEXT_ENCODING'), ENV_NAMES, 'exactly the planned names; nothing else is inherited');
     assert.equal(agent.stdin_bytes, 0, 'standard input is the null device (it ended at once with no byte)');
     const pgid = spawnSync('ps', ['-o', 'pgid=', '-p', String(agent.pid)], { encoding: 'utf8' }).stdout.trim();
     assert.equal(pgid, String(agent.pid), 'the agent leads its own process group');
