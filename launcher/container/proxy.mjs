@@ -64,12 +64,16 @@ function keyForms(key) {
 function createRedactor(key) {
   const forms = keyForms(key);
   const pattern = new RegExp(forms.map(form => form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
+  // The proper prefixes of the forms and their first characters: a body's end is held back only when it is one of them (A3.3).
+  const prefixes = new Set(forms.flatMap(form => Array.from({ length: form.length - 1 }, (unused, index) => form.slice(0, index + 1))));
+  const starts = new Set(forms.map(form => form[0]));
   let reflections = 0;
   const redact = text => text.replace(pattern, () => { reflections += 1; return REPLACEMENT; });
   return {
     redact,
-    // A body as a stream of chunks: push(chunk) and end() return the bytes to send. The last (longest form - 1) bytes are held back
-    // until more arrive, so a form split across chunks is still found; a form that starts before that tail is complete in the text.
+    // A body as a stream of chunks: push(chunk) and end() return the bytes to send. Only the longest end of the text that is a proper
+    // prefix of a form (at most longest form - 1 bytes) is held back until more arrive, so a form split across chunks is still found and
+    // everything before it is sent at once (A3.3); a form that starts before that end is complete in the text.
     body() {
       const finder = new RegExp(pattern.source, 'g');
       const hold = forms[0].length - 1;
@@ -88,7 +92,21 @@ function createRedactor(key) {
         held = text.slice(until);
         return Buffer.from(`${out}${text.slice(from, until)}`, 'latin1');
       };
-      return { push: chunk => run(`${held}${chunk.toString('latin1')}`, hold), end: () => run(held, 0) };
+      // The length of the longest end of `text` that is a proper prefix of a form; at most `hold` ends are tried, each by its first
+      // character before the set, so a chunk costs O(hold) whatever the body's size.
+      const pending = text => {
+        for (let keep = Math.min(text.length, hold); keep > 0; keep -= 1) {
+          if (starts.has(text[text.length - keep]) && prefixes.has(text.slice(-keep))) return keep;
+        }
+        return 0;
+      };
+      return {
+        push: chunk => {
+          const text = `${held}${chunk.toString('latin1')}`;
+          return run(text, pending(text));
+        },
+        end: () => run(held, 0),
+      };
     },
     // rawHeaders [name, value, ...] -> the same list without the names in `drop` and without names that hold the key, values redacted.
     headers(rawHeaders, drop) {
@@ -282,6 +300,9 @@ export function createSidecar({ config, profile, key, deps = {} }) {
       const model = sanitizeModel(result.model);
       record.response_model = model === null ? null : sanitizeModel(redactor.redact(model));
       active.delete(abort);
+      // A6.5: a deadline that passed before the request closed has latched wall_clock, also when no request or timer read the clock
+      // since; the request's missing usage is then a lower bound, not usage_unreported (R31-01).
+      accounting.check(now());
       accounting.finish(id, { complete, status: record.status, usage: record.usage });
       if (!complete) printPending();
       end(record);
