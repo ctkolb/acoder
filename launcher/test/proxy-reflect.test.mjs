@@ -3,8 +3,8 @@ import nodeTest from 'node:test';
 import * as openai from '../providers/openai.mjs';
 import { embedBase64, expectedForms } from './helpers/key-forms.mjs';
 import { invalidEvents, waitFor, withSidecar } from './helpers/sidecar-harness.mjs';
-import { request } from './helpers/socket-client.mjs';
-import { OPENSSL_MISSING } from './helpers/stub-endpoint.mjs';
+import { request, streaming } from './helpers/socket-client.mjs';
+import { gate, OPENSSL_MISSING } from './helpers/stub-endpoint.mjs';
 
 // G11: every test has a finite time limit of its own and is registered from this file (the mutation runner counts tests per module);
 // a test that needs the stub certificate is skipped with the reason when `openssl` is absent.
@@ -75,6 +75,75 @@ t('dod8-proxy-reflect: every key form of A8.6 alone in a streamed body is replac
     });
   }
 }, 60000);
+
+// R31-02 (A3.3, A8.5): the redactor holds back only the longest end of a chunk that is a proper prefix of a key form and sends the rest
+// at once. In each step the stub sends `data: <` + part 1; after the client has exactly `data: <`, part 2; after the client has that
+// part's bytes, `>\n\n`. A step {name, at, rest?} splits the form `name` after `at` characters; part 2 is the rest of the form, or
+// `rest` when given (the form is then never completed). `steps(key)` lists the steps; one sidecar serves them one after the other.
+const PREFIX = 'data: <';
+const REPLACED = '[REDACTED]';
+const splitParts = (key, { name, at, rest }) => {
+  const form = expectedForms(key)[name];
+  return [form.slice(0, at), rest ?? form.slice(at)];
+};
+async function splitSteps(steps) {
+  const gates = [];
+  let current = null;
+  const scenario = async (req, res) => {
+    const step = current;
+    const [first, second] = splitParts(keyOf(req), step);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(`${PREFIX}${first}`);
+    if (await step.middle.wait(5000)) res.write(second);
+    if (await step.last.wait(5000)) res.end('>\n\n');
+    else res.end();
+  };
+  // The stream carries no usage: without a token gate that is no usage_unreported, and the call limit is above the number of steps.
+  await withSidecar({ scenario, limits: { calls: 1000, tokens: null } }, async ctx => {
+    try {
+      for (const step of steps(ctx.key)) {
+        current = { ...step, middle: gate(), last: gate() };
+        gates.push(current.middle, current.last);
+        const [first, second] = splitParts(ctx.key, step);
+        const label = `${step.name} split after ${step.at}${step.rest === undefined ? '' : ' (not completed)'}`;
+        const before = ctx.sidecar.stats().key_reflections;
+        const client = streaming(ctx.socket);
+        // Part 1 is a prefix of the form: it is held back while the stub holds part 2, and the bytes before it are not.
+        assert.ok(await waitFor(() => client.text().length >= PREFIX.length, 3000), `${label}: the bytes before the split arrive before the rest is sent`);
+        assert.equal(client.text(), PREFIX, `${label}: exactly the bytes before the possible key form are sent`);
+        current.middle.open();
+        const shown = step.rest === undefined ? `${PREFIX}${REPLACED}` : `${PREFIX}${first}${second}`;
+        assert.ok(await waitFor(() => client.text().length >= shown.length, 3000), `${label}: part 2 is passed on before the stream ends`);
+        assert.equal(client.text(), shown, `${label}: a completed form is replaced, an incomplete one is sent as it came`);
+        current.last.open();
+        const result = await client.done;
+        assert.equal(result.complete, true, label);
+        assert.equal(client.text(), `${shown}>\n\n`, label);
+        assert.deepEqual(formsIn(client.text(), ctx.key), [], `${label}: no form of the key reaches the client`);
+        assert.equal(ctx.sidecar.stats().key_reflections - before, step.rest === undefined ? 1 : 0, `${label}: each replacement counts`);
+      }
+      assert.deepEqual(formsIn(JSON.stringify(ctx.events), ctx.key), [], 'no event line holds the key in any form');
+    } finally {
+      for (const item of gates) item.open();
+    }
+  });
+}
+// Every form of A8.6 (base64url is the same text as base64 for this key alphabet, see key-forms.mjs).
+const FORM_NAMES = ['raw', 'base64-0', 'base64-1', 'base64-2', 'hex-lower', 'hex-upper', 'percent-lower', 'percent-upper'];
+const everySplit = (key, name) => Array.from({ length: expectedForms(key)[name].length - 1 }, (unused, index) => ({ name, at: index + 1 }));
+
+t('dod8-proxy-reflect: a chunk ending in the first bytes of a key form is held only for those bytes: replaced when the next chunk completes the form, sent when it does not', () => splitSteps(() => [
+  { name: 'raw', at: 5 }, { name: 'raw', at: 5, rest: '!' },
+  // `%xx%`: its shortest end `%` is a form prefix too, and all four bytes must be held.
+  { name: 'percent-lower', at: 4 }, { name: 'percent-lower', at: 4, rest: '!' },
+  { name: 'hex-upper', at: 7 }, { name: 'hex-upper', at: 7, rest: '!' },
+]));
+
+t('dod8-proxy-reflect: each key form of A8.6 split in the middle across two chunks is held back and replaced', () => splitSteps(key => FORM_NAMES.map(name => ({ name, at: Math.floor(expectedForms(key)[name].length / 2) }))));
+
+t('dod8-proxy-reflect: the raw key split at every position of a two-chunk stream is always replaced', () => splitSteps(key => everySplit(key, 'raw')), 60000);
+
+t('dod8-proxy-reflect: the base64 form (one byte alignment) split at every position of a two-chunk stream is always replaced', () => splitSteps(key => everySplit(key, 'base64-1')), 60000);
 
 t('dod8-proxy-reflect: a body without the key passes unchanged, byte for byte', () => {
   const bytes = Buffer.from(Array.from({ length: 3000 }, (value, index) => (index * 7) % 256));

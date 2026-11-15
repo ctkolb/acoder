@@ -38,13 +38,14 @@ t('spec08-usage: an event-stream answer reaches the client chunk by chunk: the f
   const sentLast = [];
   const scenario = async (req, res) => {
     streamHead(res);
-    res.write(sseText([created()]) + ssePad());
+    res.write(sseText([created()]));
     sentLast.push(await last.wait(5000));
     res.end(sseText([completed({ input_tokens: 3, output_tokens: 2 })]));
   };
   return withSidecar({ scenario }, async ctx => {
     const client = streaming(ctx.socket);
-    const first = await waitFor(() => client.chunks.length > 0, 4000);
+    // The first frame is short and unpadded: it ends in no prefix of a key form, so none of it is held back (A3.3).
+    const first = await waitFor(() => client.text() === sseText([created()]), 4000);
     const before = client.text();
     last.open();
     const result = await client.done;
@@ -177,6 +178,46 @@ const held = async (req, res) => {
   res.write(sseText([created()]) + ssePad());
   await new Promise(resolve => { res.on('close', resolve); setTimeout(resolve, 8000); });
 };
+
+// R31-01: the deadline latches at the instant it passes (A6.5), also when no request or timer sampled the clock before a stream closed.
+t('spec08-abort: a stream that closes after the deadline, with no request in between, latches wall_clock: one wall_clock limit event before the request event and lower-bound counts', () => {
+  let clock = 1000;
+  return withSidecar({ scenario: inOrder([held]), deadline: 2000, deps: { now: () => clock } }, async ctx => {
+    const client = streaming(ctx.socket);
+    assert.ok(await waitFor(() => client.chunks.length > 0, 4000), 'the first chunk reached the client before the deadline');
+    assert.equal(ctx.sidecar.accounting.snapshot().latched, false);
+    clock = 2001;
+    client.abort();
+    const [event] = await ctx.requestEvents(1);
+    assert.deepEqual([event.decision, event.complete, event.usage], ['forwarded', false, null]);
+    assert.deepEqual(kinds(ctx), ['wall_clock'], 'the deadline, not the missing usage, is the retained reason');
+    assert.ok(indexOf(ctx, e => e.event === 'limit') < indexOf(ctx, e => e.event === 'request'));
+    const snapshot = ctx.sidecar.accounting.snapshot();
+    assert.deepEqual([snapshot.reason, snapshot.usage_missing, snapshot.tokens_lower_bound], ['wall_clock', 1, true]);
+    const refused = await request(ctx.socket, { body: '{}' });
+    assert.deepEqual([refused.status, errorCode(refused)], [429, 'acoder_budget_wall_clock']);
+    assert.deepEqual(kinds(ctx), ['wall_clock'], 'one limit event');
+    assert.deepEqual(invalidEvents(ctx.events), []);
+  });
+});
+
+t('spec08-abort: a stream that closes before the deadline without final usage, with a token limit, still latches usage_unreported', () => {
+  const clock = 1000;
+  return withSidecar({ scenario: inOrder([held]), deadline: 2000, deps: { now: () => clock } }, async ctx => {
+    assert.equal(ctx.config.limits.tokens, 1000000, 'a token limit is set');
+    const client = streaming(ctx.socket);
+    assert.ok(await waitFor(() => client.chunks.length > 0, 4000));
+    client.abort();
+    const [event] = await ctx.requestEvents(1);
+    assert.deepEqual([event.decision, event.complete, event.usage], ['forwarded', false, null]);
+    assert.deepEqual(kinds(ctx), ['usage_unreported']);
+    const snapshot = ctx.sidecar.accounting.snapshot();
+    assert.deepEqual([snapshot.reason, snapshot.usage_missing, snapshot.tokens_lower_bound], ['usage_unreported', 1, false]);
+    const refused = await request(ctx.socket, { body: '{}' });
+    assert.deepEqual([refused.status, errorCode(refused)], [429, 'acoder_usage_unreported']);
+    assert.deepEqual(invalidEvents(ctx.events), []);
+  });
+});
 
 t('spec08-abort: an abort after the L-th admission and before any refusal or STOP: latched, one calls limit event, lower-bound counts, no usage_unreported', () => withSidecar({ scenario: inOrder([held]), limits: { calls: 1 } }, async ctx => {
   const client = streaming(ctx.socket);
