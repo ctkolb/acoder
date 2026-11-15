@@ -60,11 +60,13 @@ t('S2-AC20: nothing in the repository builds, pulls or runs the image definition
   for (const [name, command] of Object.entries(scripts)) assert.ok(!/Containerfile|docker|podman/i.test(command), `script ${name}`);
 });
 
-t('S2-AC21: package.json holds exactly the changes K1.1 and K1.2 and nothing else of the launcher', () => {
+t('S2-AC21: package.json holds exactly the changes K1.1, K1.2 and K1.3 and nothing else of the launcher', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   assert.equal(pkg.scripts.test, 'node --test scripts/*.test.mjs launcher/test/*.test.mjs');
   assert.deepEqual(pkg.bin, { acoder: 'launcher/bin/acoder.mjs' });
-  assert.deepEqual(Object.keys(pkg.scripts), ['check', 'lint:markdown', 'validate', 'test', 'mutants', 'hooks:install', 'lint:workflows']);
+  assert.deepEqual(Object.keys(pkg.scripts), ['check', 'lint:markdown', 'validate', 'test', 'mutants', 'check:container', 'test:container:cleanup', 'hooks:install', 'lint:workflows']);
+  assert.equal(pkg.scripts['check:container'], 'node launcher/test/helpers/require-container.mjs && node --test launcher/test/*.container.test.mjs');
+  assert.equal(pkg.scripts['test:container:cleanup'], 'node launcher/test/helpers/cleanup-containers.mjs');
   assert.equal(pkg.scripts.check, 'npm run lint:markdown && npm run validate && npm test && npm run lint:workflows');
   assert.equal(pkg.dependencies, undefined, 'no runtime dependency');
   assert.deepEqual(Object.keys(pkg.devDependencies), ['github-slugger', 'markdown-it', 'markdownlint-cli2', 'yaml']);

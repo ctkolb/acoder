@@ -14,6 +14,8 @@
     "validate": "node scripts/validate.mjs",
     "test": "node --test scripts/*.test.mjs launcher/test/*.test.mjs",
     "mutants": "node scripts/mutants.mjs",
+    "check:container": "node launcher/test/helpers/require-container.mjs && node --test launcher/test/*.container.test.mjs",
+    "test:container:cleanup": "node launcher/test/helpers/cleanup-containers.mjs",
     "hooks:install": "node scripts/install-hooks.mjs",
     "lint:workflows": "go -C tools run github.com/rhysd/actionlint/cmd/actionlint"
   },
