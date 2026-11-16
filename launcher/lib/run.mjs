@@ -137,6 +137,13 @@ export function inspectedMounts(info, container, planMounts = []) {
   return out;
 }
 
+// The inspected mounts in the order of the plan (inspect lists them in its own order); a mount the plan does not name comes last. The
+// record's mount_summary compares its lists with the plan's in order (A9).
+function inPlanOrder(mounts, planMounts) {
+  const at = mount => { const index = planMounts.findIndex(entry => entry.container === mount.container && entry.target === mount.target); return index < 0 ? planMounts.length : index; };
+  return mounts.map((mount, index) => ({ mount, index })).sort((a, b) => at(a.mount) - at(b.mount) || a.index - b.index).map(entry => entry.mount);
+}
+
 function sameMounts(info, plan, container) {
   const planned = plan.mounts.filter(mount => mount.container === container);
   const options = tmpfsOptions(container === 'agent' ? plan.agent.create : plan.egress.create);
@@ -261,6 +268,8 @@ const CLOCK_WAIT_MS = 10000;
 const KEY_ENV = 'ACODER_UPSTREAM_KEY';
 const STAGING_ATTEMPTS = 30;
 const STAGING_RETRY_MS = 500;
+// `review cleanup` runs right after the containers of a killed launcher ended by themselves: a longer bound for the same release.
+const CLEANUP_STAGING_ATTEMPTS = 120;
 const INTERRUPTS = ['SIGINT', 'SIGTERM'];
 // The supervisor's deadline event counts as the wall clock only when the launcher's own clock agrees within this margin (clock samples may
 // differ by 1000 ms, A3.6); a prefixed line after the release is only a hint (A3.5).
@@ -748,7 +757,7 @@ function recordValuesOf(ctx, { options, settings, writable, now, launched, elaps
     provider: { id: settings.provider, endpoint: settings.endpoint, max_in_flight: settings.limits.max_in_flight },
     ...sections, inputs: { ...sections.inputs, ...(ctx.inputs ?? {}) },
     image: checked.image, runtime: checked.runtime,
-    mounts: ctx.mounts.map(({ options: unused, ...mount }) => mount), plan_mounts: ctx.basePlan?.mounts ?? [],
+    mounts: inPlanOrder(ctx.mounts, ctx.basePlan?.mounts ?? []).map(({ options: unused, ...mount }) => mount), plan_mounts: ctx.basePlan?.mounts ?? [],
     network: {
       agent_network: 'none', egress_network: names.network, egress_network_created: ctx.created.network, allowlist: ctx.basePlan?.allowlist ?? [endpointParts(settings.endpoint).host],
       extra_ca_cert: options.extraCaCert !== null,
@@ -872,7 +881,7 @@ function readStarted(file, tag) {
 }
 
 // The staging directory named in the started file is removed only when it carries the launcher's marker (A6.7); the removal is retried
-// for the bounded time of cleanupRun, since Docker Desktop releases a nested mount point a moment after the container is gone.
+// for a bounded time (60 s), since Docker Desktop releases a nested mount point a moment after the container is gone.
 async function removeNamedStaging(dir) {
   const info = lstatOrNull(dir);
   if (info === null) return 'absent';
@@ -881,7 +890,7 @@ async function removeNamedStaging(dir) {
   if (!info.isDirectory() || !path.basename(dir).startsWith('acoder-staging-') || !/^[0-9a-f]{32}$/.test(id)) return 'kept';
   for (let attempt = 1; ; attempt += 1) {
     try { removeStaging(dir, id); return 'removed'; } catch {
-      if (attempt >= STAGING_ATTEMPTS) return 'kept';
+      if (attempt >= CLEANUP_STAGING_ATTEMPTS) return 'kept';
       await new Promise(resolve => setTimeout(resolve, STAGING_RETRY_MS));
     }
   }
