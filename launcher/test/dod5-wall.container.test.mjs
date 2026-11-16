@@ -10,7 +10,7 @@ const t = (name, fn, timeout = 240000) => nodeTest(name, { timeout, skip: SKIP }
 
 // S4-AC13 (DoD 5) dod5-wall: a stub agent that never finishes is stopped at the wall-clock limit plus at most 20 s: budget, wall_clock.
 t('dod5-wall: an agent that requests forever is stopped at the wall-clock limit plus at most 20 s (budget, wall_clock)', async () => {
-  await withContainerRun({ scenario: 'never', wallSeconds: 4 }, async ({ record, result, fx, runLeft, endpointCount }) => {
+  await withContainerRun({ scenario: 'never', wallSeconds: 4, limits: { calls: 1000000, tokens: 1000000000 } }, async ({ record, result, fx, runLeft, endpointCount }) => {
     assert.ok(record !== null && record.agent_started === true, 'the agent ran');
     assert.deepEqual([record.exit_reason, record.budget_kind, result.outcome, result.exit_code], ['budget', 'wall_clock', 'budget', 3], JSON.stringify(record.conditions));
     const ran = (Date.parse(record.times.ended) - Date.parse(record.times.released)) / 1000;

@@ -7,7 +7,7 @@ import { checkApiKey, loadDefaults, loadOwnerConfig, resolveSettings } from './c
 import { checkHomeRule, checkInputPath, resolveHome } from './paths.mjs';
 import { PLACEHOLDER_KEY, agentEnvNames, buildPlan, containerBaseUrl, endpointParts } from './plan.mjs';
 import { prepare } from './prepare.mjs';
-import { runReview } from './run.mjs';
+import { reviewCleanup, runReview } from './run.mjs';
 import { canonicalHash, makeRunId } from './record.mjs';
 import { Refusal, safe } from './refusal.mjs';
 import { OUTCOMES } from './state.mjs';
@@ -130,11 +130,8 @@ export async function main(argv, env, deps) {
   const io = { stdout: deps.stdout ?? process.stdout, stderr: deps.stderr ?? process.stderr };
   const [command, subcommand, ...rest] = argv;
   if (command === 'review' && subcommand === 'run') return reviewRun(rest, env, deps, io);
-  // A6.9: the cleanup command is built in part 2 of S4; until then it refuses without any effect.
-  if (command === 'review' && subcommand === 'cleanup') {
-    io.stderr.write('refused: acoder review cleanup is not available in this build part\n');
-    return 2;
-  }
+  // A6.9: the owner's recovery after a killed launcher; it works while launch is disabled (A1.8).
+  if (command === 'review' && subcommand === 'cleanup') return reviewCleanup(rest, env, deps, io);
   if (command === 'export' && subcommand === 'manifest') return exportManifest(rest, io);
   io.stderr.write('refused: usage: acoder review run <flags> | acoder review cleanup <flags> | acoder export manifest <flags>\n');
   return 2;

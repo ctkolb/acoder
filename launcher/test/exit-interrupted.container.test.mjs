@@ -33,9 +33,9 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
       assertStagingGone({ fx, record });
       if (signal === 'SIGINT') {
         // A6.6 R: once the started file exists the ticket cannot be launched again.
-        const again = await runMain(context.argv(), { env: { PATH: process.env.PATH, ACODER_MODEL_API_KEY: fx.key }, deps: { launchEnabled: true } });
+        const again = await runMain(['review', 'run', ...context.argv()], { env: { PATH: process.env.PATH, ACODER_MODEL_API_KEY: fx.key }, deps: { launchEnabled: true } });
         assert.equal(again.code, 2, again.stderr);
-        assert.match(again.stderr, /^refused: .*run-ct-S4-r1\.(started\.)?json already exists\n$/);
+        assert.match(again.stderr, /^refused: .*(run-ct-S4-r1\.(started\.)?json|scratch-ct-S4-r1) already exists\n$/);
         assert.equal(lastLine(again.stdout), `ACODER LAUNCH ${fx.tag} refused -`);
       }
     });

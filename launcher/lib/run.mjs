@@ -10,6 +10,9 @@ import { checkImageAndRuntime, prepare } from './prepare.mjs';
 import { buildRecord, canonicalHash, makeRunId, preparedSections, recordNames, writeRecord } from './record.mjs';
 import { createRedactor, emptyScan, scanTree } from './redact.mjs';
 import { createRuntime, findRuntime } from './runtime.mjs';
+import { createDiskController } from './budget.mjs';
+import { Refusal, safe } from './refusal.mjs';
+import { removeStaging } from './snapshot.mjs';
 import { evaluateRun } from './state.mjs';
 
 export const LAUNCHER_VERSION = '0.1.0';
@@ -248,7 +251,7 @@ export function corroborate(results, requests, nonce) {
 // The run sequence (A6.6): V validate (runtime, image), S snapshot, E2 mailbox effects, E3 runtime resources, G gate, R release, A agent
 // runs, T stop, C scan and evaluate, F finalize. Test seams (deps; none is reachable from a flag, an environment variable or a file):
 // adapters, providers, home, runtime (a function that wraps the runtime wrapper), planTransform, egressNetwork, hooks {afterSnapshot,
-// beforeRelease, afterStop}, sidecarProgram, clock {now, gateMs}.
+// beforeRelease, afterStop}, sidecarProgram, clock {now, gateMs}. SIGINT and SIGTERM are handled while a run is in progress (A6.8).
 
 export const GATE_MS = 90000;
 const RELEASE_LEAD_MS = 5000;
@@ -258,6 +261,12 @@ const CLOCK_WAIT_MS = 10000;
 const KEY_ENV = 'ACODER_UPSTREAM_KEY';
 const STAGING_ATTEMPTS = 30;
 const STAGING_RETRY_MS = 500;
+const INTERRUPTS = ['SIGINT', 'SIGTERM'];
+// The supervisor's deadline event counts as the wall clock only when the launcher's own clock agrees within this margin (clock samples may
+// differ by 1000 ms, A3.6); a prefixed line after the release is only a hint (A3.5).
+const DEADLINE_MARGIN_MS = 2000;
+const EGRESS_LOG_MAX = 10000;
+const FACT_BOUNDS = { maxEntries: 200000, maxDepth: 64 };
 
 // One state boundary failure: `state` is the A6.6 state that failed; `detail` the error detail of a not-started record.
 class Boundary extends Error {
@@ -346,7 +355,23 @@ function reportFacts(writable, tag) {
   };
 }
 
-export async function runReview({ options, settings, env }, deps = {}) {
+// The snapshot of the inputs (A6.6 C): the copy of the mailbox and of every export, hashed before the agent starts and again after the stop.
+function inputsHash(prepared) {
+  return [prepared.staging.mailbox, ...Object.values(prepared.exports).map(entry => entry.copy)].map(dir => canonicalHash(dir)).join(':');
+}
+
+// A6.8: SIGINT and SIGTERM are taken over while the run is in progress (the launcher then stops, scans and records instead of dying).
+export async function runReview(input, deps = {}) {
+  const changed = notifier();
+  const interrupt = { signal: null };
+  const handlers = INTERRUPTS.map(signal => [signal, () => { interrupt.signal ??= signal; changed.notify(); }]);
+  for (const [signal, handler] of handlers) process.on(signal, handler);
+  try { return await launch(input, deps, { changed, interrupt }); } finally {
+    for (const [signal, handler] of handlers) process.off(signal, handler);
+  }
+}
+
+async function launch({ options, settings, env }, deps, { changed, interrupt }) {
   const adapters = deps.adapters;
   const providers = deps.providers;
   const now = deps.clock?.now ?? Date.now;
@@ -356,6 +381,10 @@ export async function runReview({ options, settings, env }, deps = {}) {
   const launched = now();
   const started = process.hrtime.bigint();
   const elapsedSeconds = () => Number(process.hrtime.bigint() - started) / 1e9;
+  // Every wait ends early on an interrupt; halt(state) then ends the attempt at that state (A6.8).
+  const until = (predicate, ms) => changed.until(() => interrupt.signal !== null || predicate(), ms);
+  const halt = state => { if (interrupt.signal !== null) throw new Boundary(state, 'interrupted'); };
+  const refuseInterrupted = () => { if (interrupt.signal !== null) throw new Refusal('the launch was interrupted before any effect'); };
 
   // V: the runtime and the image (A10.3, A8.4). The run id labels every resource from here on.
   const runId = makeRunId();
@@ -363,9 +392,11 @@ export async function runReview({ options, settings, env }, deps = {}) {
   let runtime = createRuntime({ ...findRuntime(options.runtime, hostEnv), env: hostEnv, runId });
   if (typeof deps.runtime === 'function') runtime = deps.runtime(runtime);
   const checked = await checkImageAndRuntime(options, runtime);
+  refuseInterrupted();
 
   // S: staging, snapshot and verification (refusals remove the staging directory themselves).
   const prepared = prepare(options, env, { home: deps.home, afterSnapshot: hooks.afterSnapshot });
+  if (interrupt.signal !== null) { prepared.cleanup(); refuseInterrupted(); }
   const { tag } = prepared;
   const writable = { ...prepared.writable, startedRecord: path.join(prepared.writable.stage, `run-${prepared.tag}.started.json`) };
   const key = env[options.apiKeyEnv];
@@ -377,8 +408,10 @@ export async function runReview({ options, settings, env }, deps = {}) {
     runId, tag, prepared, checked, plan: null, basePlan: null, checks: Object.fromEntries(CHECK_IDS.map(id => [id, { result: 'not_run', detail: 'not_reached' }])),
     mounts: [], requests: [], sidecarEvents: [], supervisorEvents: [], summary: null, created: { volume: false, network: false, egress: false, agent: false },
     agentStarted: false, released: null, startedFile: false, logRedactions: 0, conditions: new Set(), budgetKinds: [], agentExit: { code: null, signal: null, outcome: null },
-    reportInodes: {}, parser: adapters[settings.agent].createParser(),
+    reportInodes: {}, parser: adapters[settings.agent].createParser(), limited: false, stopping: false, inputsHash: null,
   };
+  // A6.5: budget_kind is the first limit, by the order in which the launcher learned of it.
+  const learn = kind => { if (!ctx.budgetKinds.includes(kind)) ctx.budgetKinds.push(kind); };
   let log = null;
   const logLine = (source, line) => {
     if (log === null) return;
@@ -386,10 +419,10 @@ export async function runReview({ options, settings, env }, deps = {}) {
     ctx.logRedactions += count;
     try { fs.writeSync(log, text); } catch { /* the log is best effort; the record says what happened */ }
   };
+  const closeLog = () => { if (log !== null) { fs.closeSync(log); log = null; } };
 
   let sidecar = null;
   let supervisor = null;
-  const changed = notifier();
   try {
     // E2: the mailbox effects (A2.3.4) and the log.
     try {
@@ -414,6 +447,7 @@ export async function runReview({ options, settings, env }, deps = {}) {
       ctx.basePlan = planFor(planArgs);
       ctx.plan = transform(structuredClone(ctx.basePlan));
       stagePayloads({ plan: ctx.plan, prepared, options, sidecarProgram: deps.sidecarProgram ?? null });
+      ctx.inputsHash = inputsHash(prepared);
       const must = async (args, extra = {}) => {
         const result = await runtime.call(args, extra);
         if (result.code !== 0) throw new Error(`the runtime refused ${args.slice(0, 2).join(' ')}`);
@@ -421,10 +455,13 @@ export async function runReview({ options, settings, env }, deps = {}) {
       };
       await must(ctx.plan.volume.create);
       ctx.created.volume = true;
+      halt('E3');
       if (deps.egressNetwork === undefined) { await must(ctx.plan.network.create); ctx.created.network = true; }
+      halt('E3');
       const egressCreate = deps.egressNetwork === undefined ? ctx.plan.egress.create : ctx.plan.egress.create.map(item => (item === ctx.plan.network.name ? deps.egressNetwork : item));
       const sidecarId = (await must(egressCreate, { extraEnv: { [KEY_ENV]: key } })).stdout.trim();
       ctx.created.egress = true;
+      halt('E3');
       const egressInfo = await runtime.inspect('container', names.egress);
       ctx.mounts.push(...inspectedMounts(egressInfo, 'egress', ctx.basePlan.mounts));
       ctx.checks.H3 = checkH3(egressInfo, deps.egressNetwork === undefined ? ctx.basePlan : { ...ctx.basePlan }, ids, names.network);
@@ -442,12 +479,19 @@ export async function runReview({ options, settings, env }, deps = {}) {
           ctx.sidecarEvents.push(parsed.event);
           if (parsed.event.event === 'request') ctx.requests.push(parsed.event);
           if (parsed.event.event === 'summary') ctx.summary = parsed.event;
-          if (parsed.event.event === 'limit' && !ctx.budgetKinds.includes(parsed.event.kind)) ctx.limitEvent = parsed.event.kind;
+          if (parsed.event.event === 'fatal') ctx.sidecarFatal = true;
+          if (parsed.event.event === 'limit') {
+            // A6.4: usage_unreported is an error condition, the other kinds are budgets; either way the launcher stops the run.
+            if (parsed.event.kind === 'usage_unreported') ctx.conditions.add('usage_unreported');
+            else learn(parsed.event.kind);
+            ctx.limited = true;
+          }
           changed.notify();
         },
       });
       const sidecarOf = kind => ctx.sidecarEvents.filter(event => event.event === kind);
-      await changed.until(() => sidecarOf('ready').length > 0 && sidecarOf('upstream').length > 0, gateEnds());
+      await until(() => sidecarOf('ready').length > 0 && sidecarOf('upstream').length > 0, gateEnds());
+      halt('E3');
       const upstream = sidecarOf('upstream')[0] ?? null;
       const running = await runtime.inspect('container', names.egress);
       const sidecarAddress = running?.Networks?.[names.network]?.IPAddress ?? null;
@@ -461,6 +505,7 @@ export async function runReview({ options, settings, env }, deps = {}) {
       ctx.plan = transform(structuredClone(ctx.basePlan));
       await must(ctx.plan.agent.create);
       ctx.created.agent = true;
+      halt('E3');
       const agentInfo = await runtime.inspect('container', names.agent);
       ctx.mounts.unshift(...inspectedMounts(agentInfo, 'agent', ctx.basePlan.mounts));
       ctx.checks.H1 = checkH1(agentInfo);
@@ -489,18 +534,20 @@ export async function runReview({ options, settings, env }, deps = {}) {
     const sup = kind => ctx.supervisorEvents.filter(event => event.event === kind);
     const side = kind => ctx.sidecarEvents.filter(event => event.event === kind);
     // The supervisor's probes make four requests; their events are awaited whatever they say (corroborate() matches them to the nonce).
-    await changed.until(() => sup('probes').length > 0 && side('ready').length > 0 && side('upstream').length > 0 && ctx.requests.length >= 4, gateEnds());
+    await until(() => sup('probes').length > 0 && side('ready').length > 0 && side('upstream').length > 0 && ctx.requests.length >= 4, gateEnds());
+    halt('G');
     const clocks = [];
     for (const [channel, events] of [[sidecar, side], [supervisor, sup]]) {
       if (now() >= ctx.gateDeadline || channel.state.exit !== null) { clocks.push(null); continue; }
       const start = now();
       channel.write('CLOCK');
-      const got = await changed.until(() => events('clock').length > 0, Math.min(CLOCK_WAIT_MS, gateEnds()));
+      const got = await until(() => events('clock').length > 0, Math.min(CLOCK_WAIT_MS, gateEnds()));
       const end = now();
       clocks.push(got && events('clock').length === 1 ? { start, end, sample: events('clock')[0].clock_epoch_ms } : null);
     }
     // A late, duplicated or malformed event fails its check (A3.6).
-    await changed.until(() => false, 200);
+    await until(() => false, 200);
+    halt('G');
     const inTime = now() <= ctx.gateDeadline;
     const firstLocal = ctx.requests.find(event => event.decision === 'local') ?? null;
     ctx.checks.U1 = !inTime || ctx.sidecarInvalid ? bad('protocol') : checkU1(
@@ -520,7 +567,8 @@ export async function runReview({ options, settings, env }, deps = {}) {
     const releaseAt = now() + RELEASE_LEAD_MS;
     const deadline = releaseAt + settings.limits.wall_seconds * 1000;
     sidecar.write(`PHASE agent ${deadline}`);
-    const phased = await changed.until(() => side('phase').length > 0, releaseAt - now());
+    const phased = await until(() => side('phase').length > 0, releaseAt - now());
+    halt('R');
     if (!phased) throw new Boundary('R', 'runtime_failure');
     try {
       const fd = fs.openSync(writable.startedRecord, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o644);
@@ -534,51 +582,79 @@ export async function runReview({ options, settings, env }, deps = {}) {
       ctx.startedFile = true;
     } catch (error) { throw new Boundary('R', 'runtime_failure', error); }
     await hooks.beforeRelease?.({ runId, names, endAgentInput: () => supervisor.end(), endSidecarInput: () => sidecar.end() });
+    halt('R');
     if (now() > releaseAt) throw new Boundary('R', 'runtime_failure');
-    await new Promise(resolve => setTimeout(resolve, Math.max(0, releaseAt - now())));
+    await until(() => false, releaseAt - now());
+    halt('R');
     supervisor.write(`RELEASE ${runId} ${deadline}`);
     ctx.released = now();
     const releasedMono = process.hrtime.bigint();
     logLine('launcher', 'released');
 
-    // A: the agent runs until it ends, the wall clock fires, a limit is reported, or the sidecar ends (A6.5, A3.7).
+    // A: the agent runs until it ends, the wall clock fires, a limit is reported, the disk bound is reached, the sidecar ends or fails, or
+    // the launcher is interrupted (A6.5, A3.7, A8.6). The disk controller samples from the release on (A8.6).
     const wallMs = settings.limits.wall_seconds * 1000;
     const wallLeft = () => wallMs - Number(process.hrtime.bigint() - releasedMono) / 1e6;
-    await changed.until(() => supervisor.state.exit !== null || sidecar.state.exit !== null || ctx.limitEvent !== undefined || wallLeft() <= 0, wallMs + 1000);
-    // T: with a live sidecar, STOP first and await its summary before the agent container is signalled.
-    if (supervisor.state.exit === null && sidecar.state.exit !== null && ctx.summary === null) {
-      ctx.conditions.add('egress_sidecar_exited');
+    const disk = createDiskController({
+      scratch: writable.scratch, files: [writable.reportMd, writable.reportJson, ctx.logPath], limitBytes: settings.limits.scratch_max_bytes,
+      onStop: () => { if (!ctx.stopping) { learn('disk'); ctx.diskStopped = true; changed.notify(); } },
+    });
+    disk.run().catch(() => { /* a failed sample is not a stop; the post-run scan still runs */ });
+    const stopNow = () => supervisor.state.exit !== null || sidecar.state.exit !== null || ctx.limited || ctx.diskStopped === true || interrupt.signal !== null
+      || ctx.sidecarInvalid === true || ctx.sidecarFatal === true || wallLeft() <= 0;
+    while (!stopNow()) await changed.until(stopNow, Math.max(1, wallLeft()));
+
+    // T: the stop (A6.5, A6.6). A sidecar that failed or ended on its own is a pre-existing failure: A3.7 immediate error stop. Otherwise
+    // STOP first, its summary awaited (at most 10 s), and only then the agent container is signalled (10 s grace, then kill).
+    ctx.stopping = true;
+    disk.stop();
+    if (interrupt.signal !== null) ctx.conditions.add('interrupted');
+    if (wallLeft() <= 0 || (sup('deadline').length > 0 && wallLeft() <= DEADLINE_MARGIN_MS)) learn('wall_clock');
+    const agentRunning = () => supervisor.state.exit === null;
+    const signalAgent = async args => {
+      const result = await runtime.call(args, { timeoutMs: (STOP_GRACE_SECONDS + 20) * 1000 });
+      if (result.code === 0 || !agentRunning()) return;
+      ctx.conditions.add('runtime_failure');
+      logLine('launcher', `the runtime failed ${args[0]} of the agent container`);
       await runtime.call(['kill', names.agent]);
+    };
+    if (ctx.sidecarInvalid === true || ctx.sidecarFatal === true) {
+      ctx.conditions.add('egress_protocol_error');
+      await runtime.call(['kill', names.egress]);
+      if (agentRunning()) await signalAgent(['kill', names.agent]);
+    } else if (sidecar.state.exit !== null && ctx.summary === null) {
+      ctx.conditions.add('egress_sidecar_exited');
+      if (agentRunning()) await signalAgent(['kill', names.agent]);
     } else {
-      if (ctx.limitEvent !== undefined) ctx.budgetKinds.push(ctx.limitEvent);
-      else if (supervisor.state.exit === null && wallLeft() <= 0) ctx.budgetKinds.push('wall_clock');
-      sidecar.write('STOP');
-      const summarized = await changed.until(() => ctx.summary !== null, SUMMARY_WAIT_MS);
-      if (!summarized) { ctx.conditions.add('egress_protocol_error'); await runtime.call(['kill', names.egress]); }
-      if (supervisor.state.exit === null) await runtime.call(['stop', '--time', String(STOP_GRACE_SECONDS), names.agent], { timeoutMs: (STOP_GRACE_SECONDS + 20) * 1000 });
+      if (ctx.summary === null) {
+        sidecar.write('STOP');
+        await changed.until(() => ctx.summary !== null || sidecar.state.exit !== null, SUMMARY_WAIT_MS);
+      }
+      if (ctx.summary === null) { ctx.conditions.add('egress_protocol_error'); await runtime.call(['kill', names.egress]); }
+      if (agentRunning()) await signalAgent(['stop', '--time', String(STOP_GRACE_SECONDS), names.agent]);
     }
     const agentExit = await Promise.race([supervisor.exited, new Promise(resolve => setTimeout(() => resolve({ code: null, signal: null }), 30000))]);
     await Promise.race([sidecar.exited, new Promise(resolve => setTimeout(resolve, 15000))]);
-    await hooks.afterStop?.({ runId, names });
+    await hooks.afterStop?.({ runId, names, staging: prepared.staging.dir, snapshot: prepared.staging.mailbox });
     const parsed = ctx.parser.result();
     const code = agentExit.code;
     ctx.agentExit = { code, signal: null, outcome: adapters[settings.agent].outcome({ code, signal: null, parsed }) };
     ctx.advisory = { ...parsed.advisory, counted_by: `adapter:${settings.agent}` };
     ctx.agentStarted = sup('agent_started').length > 0 || ctx.agentStarted;
-    return await finishStarted(ctx, { runtime, names, options, settings, writable, redactor, key, now, launched, elapsedSeconds, log, closeLog: () => { if (log !== null) { fs.closeSync(log); log = null; } } });
+    return await finishStarted(ctx, { runtime, names, options, settings, writable, redactor, key, now, launched, elapsedSeconds, closeLog });
   } catch (error) {
     const boundary = error instanceof Boundary ? error : new Boundary(ctx.startedFile ? 'R' : 'E3', 'runtime_failure', error);
     if (ctx.startedFile) {
-      ctx.conditions.add('runtime_failure');
+      ctx.conditions.add(boundary.detail === 'interrupted' ? 'interrupted' : 'runtime_failure');
       logLine('launcher', `failure after the started file: ${boundary.detail}`);
       supervisor?.end();
       sidecar?.end();
-      return await finishStarted(ctx, { runtime, names, options, settings, writable, redactor, key, now, launched, elapsedSeconds, log, closeLog: () => { if (log !== null) { fs.closeSync(log); log = null; } } });
+      return await finishStarted(ctx, { runtime, names, options, settings, writable, redactor, key, now, launched, elapsedSeconds, closeLog });
     }
     logLine('launcher', `not started: ${boundary.state} ${boundary.detail}`);
     supervisor?.end();
     sidecar?.end();
-    if (log !== null) { fs.closeSync(log); log = null; }
+    closeLog();
     return finishNotStarted(ctx, boundary, { runtime, names, options, settings, writable, redactor, now, launched, elapsedSeconds, sidecar, supervisor });
   }
 }
@@ -619,10 +695,49 @@ async function cleanupRun(ctx, runtime, names) {
   return leftovers;
 }
 
+// A9 egress_log: the request events without their event and probe fields, at most 10000 entries (the totals stay exact).
+export function egressLogOf(requests) {
+  const log = requests.slice(0, EGRESS_LOG_MAX).map(({ event: unusedEvent, probe: unusedProbe, ...entry }) => entry);
+  return { log, truncated: requests.length > EGRESS_LOG_MAX };
+}
+
+// A9 inputs.scratch_git_entries and scratch_symlinks_outside: entries named `.git` in any letter case, and links whose target is absolute
+// or leaves scratch, found with lstat and readdir only (nothing is followed or opened). complete is false when a bound is reached or an
+// entry cannot be read; the counts are then lower bounds.
+export function scratchFacts(scratch, bounds = {}) {
+  const limits = { ...FACT_BOUNDS, ...bounds };
+  const facts = { git_entries: 0, symlinks_outside: 0, complete: true };
+  let entries = 0;
+  const walk = (directory, depth) => {
+    let found;
+    try { found = fs.readdirSync(directory); } catch { facts.complete = false; return; }
+    if (depth + 1 > limits.maxDepth && found.length > 0) { facts.complete = false; return; }
+    for (const name of found) {
+      entries += 1;
+      if (entries > limits.maxEntries) { facts.complete = false; return; }
+      const full = path.join(directory, name);
+      const info = lstatOrNull(full);
+      if (info === null) continue;
+      if (name.toLowerCase() === '.git') facts.git_entries += 1;
+      if (info.isSymbolicLink()) {
+        let target;
+        try { target = fs.readlinkSync(full); } catch { facts.complete = false; continue; }
+        const resolved = path.resolve(directory, target);
+        if (path.isAbsolute(target) || (resolved !== scratch && !resolved.startsWith(`${scratch}/`))) facts.symlinks_outside += 1;
+      } else if (info.isDirectory()) walk(full, depth + 1);
+      if (!facts.complete) return;
+    }
+  };
+  walk(scratch, 0);
+  return facts;
+}
+
 function recordValuesOf(ctx, { options, settings, writable, now, launched, elapsedSeconds, names }) {
   const { prepared, checked } = ctx;
   const payload = dir => { try { return canonicalHash(dir); } catch { return '0'.repeat(64); } };
   const totals = totalsFrom(ctx);
+  const egress = egressLogOf(ctx.requests);
+  const sections = preparedSections(prepared, options);
   return {
     run_id: ctx.runId, tag: ctx.tag,
     launcher: {
@@ -631,7 +746,7 @@ function recordValuesOf(ctx, { options, settings, writable, now, launched, elaps
     },
     agent: { name: settings.agent, cli_version: null, model: settings.model, effort: settings.effort },
     provider: { id: settings.provider, endpoint: settings.endpoint, max_in_flight: settings.limits.max_in_flight },
-    ...preparedSections(prepared, options),
+    ...sections, inputs: { ...sections.inputs, ...(ctx.inputs ?? {}) },
     image: checked.image, runtime: checked.runtime,
     mounts: ctx.mounts.map(({ options: unused, ...mount }) => mount), plan_mounts: ctx.basePlan?.mounts ?? [],
     network: {
@@ -639,15 +754,14 @@ function recordValuesOf(ctx, { options, settings, writable, now, launched, elaps
       extra_ca_cert: options.extraCaCert !== null,
     },
     isolation_checks: CHECK_IDS.map(id => ({ id, ...ctx.checks[id] })),
-    egress_log: ctx.requests.map(({ event: unusedEvent, probe: unusedProbe, ...entry }) => entry),
-    egress_log_truncated: false, egress_totals: totals,
+    egress_log: egress.log, egress_log_truncated: egress.truncated, egress_totals: totals,
     limits: { wall_seconds: settings.limits.wall_seconds, calls: settings.limits.calls, tokens: settings.limits.tokens, scratch_max_bytes: settings.limits.scratch_max_bytes },
     usage: {
       calls_forwarded: totals.forwarded, tokens: ctx.summary?.tokens ?? null, usage_missing: ctx.summary?.usage_missing ?? 0, admitted_after_token_limit: ctx.summary?.admitted_after_token_limit ?? 0,
       in_flight_at_limit: ctx.summary?.in_flight_at_limit ?? null, counted_by: 'egress', advisory: ctx.advisory ?? null,
     },
     times: { launched: nowIso(launched), released: ctx.released === null ? null : nowIso(ctx.released), ended: nowIso(now()), wall_seconds: Math.round(elapsedSeconds() * 1000) / 1000 },
-    agent_exit: ctx.agentExit, reports: reportFacts(writable, ctx.tag), scratch_symlinks_outside: 0,
+    agent_exit: ctx.agentExit, reports: reportFacts(writable, ctx.tag), scratch_symlinks_outside: ctx.symlinksOutside ?? 0,
   };
 }
 
@@ -682,16 +796,23 @@ async function finishNotStarted(ctx, boundary, { runtime, names, options, settin
   return { outcome: 'not-started', exit_code: 1, record: file, tag: ctx.tag, run_id: ctx.runId, leftovers, state: boundary.state, detail: boundary.detail };
 }
 
-// A started run: C scan and evaluate, F record, cleanup (A6.6). The post-run scan, budgets and the full stop sequence are completed in
-// part 2 of S4.
+// A started run: C (the snapshot re-hash while the staging directory exists, cleanup of the runtime resources and the staging directory,
+// the secret scan after both containers are gone, the record facts, the reason by precedence) and F (the record, exclusive; A6.6).
 async function finishStarted(ctx, { runtime, names, options, settings, writable, redactor, key, now, launched, elapsedSeconds, closeLog }) {
+  let unchanged;
+  try { unchanged = ctx.inputsHash !== null && inputsHash(ctx.prepared) === ctx.inputsHash; } catch { unchanged = false; }
+  if (!unchanged) ctx.conditions.add('input_snapshot_changed');
+  if ((ctx.summary?.key_reflections ?? 0) > 0) ctx.conditions.add('secret_found');
   const leftovers = await cleanupRun(ctx, runtime, names);
   leftovers.push(...removeEmptyReports(ctx, writable, false));
   const recordPaths = recordNames({ stageDir: writable.stage, tag: ctx.tag, runId: ctx.runId, started: true });
   closeLog();
   try { fs.renameSync(ctx.logPath, recordPaths.log); } catch { /* the not-started name stays */ }
   const logPath = lstatOrNull(recordPaths.log) === null ? ctx.logPath : recordPaths.log;
+  const facts = scratchFacts(writable.scratch);
   const scan = scanTree({ key, scratch: writable.scratch, files: [writable.reportMd, writable.reportJson, logPath] });
+  ctx.inputs = { unchanged_at_end: unchanged, scratch_git_entries: facts.git_entries, scratch_git_entries_complete: facts.complete && scan.status !== 'incomplete' };
+  ctx.symlinksOutside = facts.symlinks_outside;
   const values = recordValuesOf(ctx, { options, settings, writable, now, launched, elapsedSeconds, names });
   const decision = evaluateRun({
     flags: [...ctx.conditions], budgetKinds: ctx.budgetKinds, tokensLowerBound: (ctx.summary?.usage_missing ?? 0) > 0, scan_status: scan.status,
@@ -705,6 +826,116 @@ async function finishStarted(ctx, { runtime, names, options, settings, writable,
   return { outcome: decision.outcome, exit_code: decision.exit_code, record: recordPaths.record, tag: ctx.tag, run_id: ctx.runId, leftovers };
 }
 
-// Placeholders of part 2 (red commit): replaced by the implementation.
-export const scratchFacts = () => ({ git_entries: 0, symlinks_outside: 0, complete: true });
-export const egressLogOf = () => ({ log: [], truncated: false });
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// `acoder review cleanup --mailbox <dir> --ticket <file>` (A6.9, A1.4): recovery after a killed launcher. It reads the started file (or,
+// without one, the run ids of the ticket's not-started files, since the labels hold only the run id), removes the containers, volumes and
+// networks labelled with those run ids (listed by the label key and filtered here, A6.9) and the staging directory named in the started
+// file (only with its marker), and writes `run-<tag>.crashed.json`. It never starts anything and never makes a started ticket launchable.
+const CLEANUP_FLAGS = ['--mailbox', '--ticket'];
+const TICKET_FILE = /^ticket-([A-Za-z0-9._-]{1,120})\.md$/;
+const RUN_ID_TEXT = '\\d{8}T\\d{6}Z-[0-9a-f]{6}';
+const STAGING_MARKER = '.acoder-staging';
+const LISTS = [
+  ['container', ['ps', '--all', '--filter', 'label=acoder.run', '--format', '{{.Names}}\t{{.Label "acoder.run"}}'], name => ['rm', '--force', name]],
+  ['volume', ['volume', 'ls', '--filter', 'label=acoder.run', '--format', '{{.Name}}\t{{.Label "acoder.run"}}'], name => ['volume', 'rm', '--force', name]],
+  ['network', ['network', 'ls', '--filter', 'label=acoder.run', '--format', '{{.Name}}\t{{.Label "acoder.run"}}'], name => ['network', 'rm', name]],
+];
+
+function parseCleanup(argv) {
+  const found = {};
+  for (let index = 0; index < argv.length; index += 2) {
+    const [flag, value] = [argv[index], argv[index + 1]];
+    if (!CLEANUP_FLAGS.includes(flag)) throw new Refusal(`usage: acoder review cleanup --mailbox <dir> --ticket <file>; unknown argument ${safe(flag)}`);
+    if (Object.hasOwn(found, flag)) throw new Refusal(`${flag} is given more than once`);
+    if (typeof value !== 'string' || !path.isAbsolute(value)) throw new Refusal(`${flag} needs an absolute path`);
+    found[flag] = path.resolve(value);
+  }
+  for (const flag of CLEANUP_FLAGS) if (!Object.hasOwn(found, flag)) throw new Refusal(`usage: acoder review cleanup --mailbox <dir> --ticket <file>; ${flag} is missing`);
+  const ticket = found['--ticket'];
+  const mailbox = found['--mailbox'];
+  const tag = TICKET_FILE.exec(path.basename(ticket))?.[1];
+  if (tag === undefined) throw new Refusal('--ticket must name a file ticket-<tag>.md');
+  if (!ticket.startsWith(`${mailbox}/`)) throw new Refusal('--ticket must lie inside --mailbox');
+  return { tag, stage: path.dirname(ticket) };
+}
+
+// The started file of this ticket, or null when there is none; anything else in its place is a refusal.
+function readStarted(file, tag) {
+  const info = lstatOrNull(file);
+  if (info === null) return null;
+  let started = null;
+  try { started = info.isFile() ? JSON.parse(fs.readFileSync(file, 'utf8')) : null; } catch { started = null; }
+  const valid = started?.format === 'acoder-run-started/1' && started.tag === tag && new RegExp(`^${RUN_ID_TEXT}$`).test(String(started.run_id))
+    && typeof started.resources?.staging === 'string' && path.isAbsolute(started.resources.staging);
+  if (!valid) throw new Refusal(`the started file ${safe(file)} is not a started file of this ticket`);
+  return started;
+}
+
+// The staging directory named in the started file is removed only when it carries the launcher's marker (A6.7); the removal is retried
+// for the bounded time of cleanupRun, since Docker Desktop releases a nested mount point a moment after the container is gone.
+async function removeNamedStaging(dir) {
+  const info = lstatOrNull(dir);
+  if (info === null) return 'absent';
+  const marker = lstatOrNull(path.join(dir, STAGING_MARKER));
+  const id = marker?.isFile() ? fs.readFileSync(path.join(dir, STAGING_MARKER), 'utf8').trim() : '';
+  if (!info.isDirectory() || !path.basename(dir).startsWith('acoder-staging-') || !/^[0-9a-f]{32}$/.test(id)) return 'kept';
+  for (let attempt = 1; ; attempt += 1) {
+    try { removeStaging(dir, id); return 'removed'; } catch {
+      if (attempt >= STAGING_ATTEMPTS) return 'kept';
+      await new Promise(resolve => setTimeout(resolve, STAGING_RETRY_MS));
+    }
+  }
+}
+
+async function labelledResources(runtime) {
+  const out = [];
+  for (const [kind, args, removal] of LISTS) {
+    const result = await runtime.call(args);
+    if (result.code !== 0) throw new Error(`the runtime could not list the labelled ${kind}s`);
+    for (const line of result.stdout.split('\n')) {
+      const [name, run] = line.trim().split('\t');
+      if (name && run) out.push({ kind, name, run, removal: removal(name) });
+    }
+  }
+  return out;
+}
+
+export async function reviewCleanup(argv, env, deps = {}, io = { stdout: process.stdout, stderr: process.stderr }) {
+  try {
+    const { tag, stage } = parseCleanup(argv);
+    const crashedFile = path.join(stage, `run-${tag}.crashed.json`);
+    if (lstatOrNull(crashedFile) !== null) throw new Refusal(`${safe(crashedFile)} already exists`);
+    const started = readStarted(path.join(stage, `run-${tag}.started.json`), tag);
+    const attempt = new RegExp(`^run-${tag.replace(/[.]/g, '\\.')}\\.notstarted-(${RUN_ID_TEXT})\\.(?:json|log)$`);
+    const runIds = started !== null ? [started.run_id] : [...new Set(fs.readdirSync(stage).map(name => attempt.exec(name)?.[1]).filter(Boolean))].sort();
+    let runtime = createRuntime({ ...findRuntime(null, withoutKey(env, KEY_ENV)), env: withoutKey(env, KEY_ENV), runId: runIds[0] ?? 'cleanup' });
+    if (typeof deps.runtime === 'function') runtime = deps.runtime(runtime);
+    await runtime.answers();
+    const removed = [];
+    const leftovers = [];
+    const mine = (await labelledResources(runtime)).filter(entry => runIds.includes(entry.run));
+    for (const entry of mine) await runtime.call(entry.removal);
+    const remaining = new Set((await labelledResources(runtime)).map(entry => entry.name));
+    for (const entry of mine) (remaining.has(entry.name) ? leftovers : removed).push(entry.name);
+    if (started !== null) {
+      const outcome = await removeNamedStaging(started.resources.staging);
+      if (outcome === 'removed') removed.push(started.resources.staging);
+      if (outcome === 'kept') leftovers.push(started.resources.staging);
+    } else {
+      for (const file of [path.join(stage, `scratch-${tag}`), path.join(stage, `report-${tag}.md`), path.join(stage, `report-${tag}.json`)]) {
+        if (lstatOrNull(file) !== null) io.stdout.write(`owner action: inspect and remove ${safe(file)}\n`);
+      }
+      io.stdout.write('owner action: the staging directory cannot be located without a started file; inspect the staging parent for acoder-staging-* directories\n');
+    }
+    const crashed = { format: 'acoder-run-crashed/1', run_id: started?.run_id ?? (runIds.length === 1 ? runIds[0] : null), tag, started: started !== null, removed, time: nowIso(Date.now()) };
+    writeNew(crashedFile, `${JSON.stringify(crashed, null, 2)}\n`);
+    for (const name of removed) io.stdout.write(`removed: ${safe(name)}\n`);
+    for (const name of leftovers) io.stderr.write(`leftover: ${safe(name)}\n`);
+    io.stdout.write(`crashed record: ${safe(crashedFile)}\n`);
+    return leftovers.length === 0 ? 0 : 1;
+  } catch (error) {
+    if (error instanceof Refusal) { io.stderr.write(`refused: ${error.message}\n`); return 2; }
+    io.stderr.write(`error: ${safe(error?.message ?? error)}\n`);
+    return 1;
+  }
+}

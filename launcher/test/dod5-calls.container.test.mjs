@@ -8,11 +8,14 @@ import { assertStagingGone, assertStopOrder, withContainerRun } from './helpers/
 const t = (name, fn, timeout = 240000) => nodeTest(name, { timeout, skip: SKIP }, fn);
 const L = 3;
 
-// The common assertions of a call-limit stop: the stub endpoint's own count is exactly L, the record shows calls_forwarded L, budget calls.
-function assertCalls({ record, result, fx, runLeft, endpointCount }) {
+// The common assertions of a call-limit stop: the stub endpoint's own count is exactly L (at most L when `atMost`: owner decision for the
+// flood, where the STOP of A6.5 may abort admitted parallel requests before they reach upstream, A6.3), the record shows calls_forwarded L,
+// budget calls.
+function assertCalls({ record, result, fx, runLeft, endpointCount }, { atMost = false } = {}) {
   assert.ok(record !== null && record.agent_started === true, 'the agent ran');
   assert.deepEqual([record.exit_reason, record.budget_kind, result.exit_code], ['budget', 'calls', 3], JSON.stringify(record.conditions));
-  assert.equal(endpointCount(), L, 'the stub endpoint counted exactly L requests');
+  if (atMost) assert.ok(endpointCount() <= L, `the stub endpoint counted at most L requests (${endpointCount()})`);
+  else assert.equal(endpointCount(), L, 'the stub endpoint counted exactly L requests');
   assert.equal(record.usage.calls_forwarded, L);
   assert.equal(record.egress_totals.forwarded, L);
   assert.equal(record.limits.calls, L);
@@ -32,7 +35,7 @@ t('dod5-calls: an agent that requests forever gets exactly L calls through; the 
 // S4-AC13 dod5-calls, scenario flood (SPEC-08 repeated): many parallel requests straight to the request socket, no agent output.
 t('dod5-calls: a flood of parallel requests straight to the request socket gets exactly L calls through (budget, calls)', async () => {
   await withContainerRun({ scenario: 'flood', wallSeconds: 60, limits: { calls: L } }, async run => {
-    assertCalls(run);
+    assertCalls(run, { atMost: true });
     const refused = run.record.egress_totals.refused_by_reason;
     assert.ok((refused.acoder_budget_calls ?? 0) + (refused.acoder_in_flight ?? 0) >= 1, 'surplus requests were refused');
   });

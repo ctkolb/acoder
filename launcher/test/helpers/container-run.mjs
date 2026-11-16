@@ -220,7 +220,8 @@ export function containerDeps(options, context) {
 // afterStop}(info, context), afterSnapshot(info, context), endpoint, answers, forbidden, ownNetwork (the launcher creates EXT itself; the
 // stub endpoint is then out of its reach), skillFiles, tag, fixture.
 export async function withContainerRun(options, fn) {
-  return withContainerEnv(options, async context => fn({ ...context, ...(await runInContext(options, context)) }));
+  // The run first: the context then carries what the run added to it (the inspect answers the launcher read).
+  return withContainerEnv(options, async context => { const run = await runInContext(options, context); return fn({ ...context, ...run }); });
 }
 
 // One runReview in the topology of withContainerEnv (a test may launch twice in the same fixture); returns {result, record, runLeft,

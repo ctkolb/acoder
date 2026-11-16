@@ -32,7 +32,7 @@ function hostSum(fx) {
 // Watches the host sum every 50 ms from the release on; `crossed` is the first time it was at or above the bound.
 function watcher(fx) {
   const state = { crossed: null, timer: null };
-  state.start = () => { state.timer = setInterval(() => { if (state.crossed === null && hostSum(fx) >= BOUND) state.crossed = Date.now(); }, 50); };
+  state.start = () => { state.timer = setInterval(() => { if (state.crossed === null && hostSum(fx) >= BOUND) state.crossed = Date.now(); }, 50); state.timer.unref(); };
   state.stop = () => clearInterval(state.timer);
   return state;
 }
@@ -42,6 +42,7 @@ function watcher(fx) {
 // limits in the record; STOP first and the summary before any agent signal; lower-bound counts, no usage_unreported.
 t('dod5-disk: persistent scratch writes past the bound with a stream open: detected within 2000 ms, stopped within 20 s, budget disk, STOP and summary before any agent signal', async () => {
   let watch = null;
+  try {
   await withContainerRun({
     scenario: 'script', wallSeconds: 120, limits: { scratch_max_bytes: BOUND }, answers: { default: 'hold' },
     steps: [{ do: 'open', id: 's' }, { do: 'wait-head', id: 's' }, { do: 'grow', name: 'big', bytes: 16384, everyMs: 50 }],
@@ -62,6 +63,7 @@ t('dod5-disk: persistent scratch writes past the bound with a stream open: detec
     assert.deepEqual(runLeft, { containers: [], volumes: [], networks: [] });
     assertStagingGone({ fx, record });
   });
+  } finally { watch?.stop(); }
 });
 
 // Controls: output below the bound continues; a link to a large host file is not followed (and is counted as a link leaving scratch);

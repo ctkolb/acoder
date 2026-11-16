@@ -48,7 +48,7 @@ t('dod5-launcher-killed: after SIGKILL of the launcher both containers end withi
     assert.deepEqual([crashed.format, crashed.run_id, crashed.tag, crashed.started], ['acoder-run-crashed/1', started.run_id, fx.tag, true]);
     assert.deepEqual([...crashed.removed].sort(), [started.resources.network, started.resources.staging, started.resources.volume].sort());
     assert.ok(fs.existsSync(fx.writable.startedRecord), 'the started file stays');
-    const again = await runMain(context.argv(), { env: { PATH: process.env.PATH, ACODER_MODEL_API_KEY: fx.key }, deps: { launchEnabled: true } });
+    const again = await runMain(['review', 'run', ...context.argv()], { env: { PATH: process.env.PATH, ACODER_MODEL_API_KEY: fx.key }, deps: { launchEnabled: true } });
     assert.equal(again.code, 2, 'the ticket stays unlaunchable');
     assert.equal(lastLine(again.stdout), `ACODER LAUNCH ${fx.tag} refused -`);
   });

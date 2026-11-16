@@ -52,7 +52,7 @@ t('spec09-faults: SIGINT during the gate ends not-started (interrupted), leaves 
     process.kill(launcher.child.pid, 'SIGINT');
     const done = await launcher.done;
     assert.equal(done.code, 1, done.stderr);
-    const [, outcome, recordPath] = lastLine(done.stdout).split(' ').slice(1);
+    const [, outcome, recordPath] = lastLine(done.stdout).split(' ').slice(2);
     assert.equal(outcome, 'not-started');
     const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
     assert.deepEqual([record.agent_started, record.error_detail, record.exit_reason], [false, 'interrupted', null]);

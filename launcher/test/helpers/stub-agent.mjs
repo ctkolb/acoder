@@ -81,6 +81,7 @@ async function attempt(action) {
   try {
     if (action.op === 'read') out.text = fs.readFileSync(action.path, 'utf8').slice(0, 4096);
     else if (action.op === 'list') out.names = fs.readdirSync(action.path).sort();
+    else if (action.op === 'environ-names') out.names = fs.readFileSync(`/proc/${action.pid}/environ`, 'latin1').split('\0').filter(Boolean).map(entry => entry.slice(0, entry.indexOf('='))).sort();
     else if (action.op === 'append') fs.appendFileSync(action.path, 'x');
     else if (action.op === 'truncate') fs.truncateSync(action.path, 0);
     else if (action.op === 'rename') fs.renameSync(action.path, `${action.path}.moved`);
@@ -154,14 +155,16 @@ async function flood(parallel) {
   await Promise.all(Array.from({ length: parallel }, loop));
 }
 
-// script steps: request, open {id}, abort {id, afterMs}, wait-head {id}, reports {md, json, jsonPad} (text, or null for none; jsonPad: a padded JSON report), write {name, bytes},
+// script steps: request {host, suffix, socket}, open {id}, abort {id, afterMs}, wait-head {id}, reports {md, json, jsonPad} (text, or null for none; jsonPad: a padded JSON report), write {name, bytes},
 // grow {name, bytes, everyMs}, link {name, target}, churn {ms} (files created and removed at once), mkfifo {name}, mkdir {name, mode},
-// tree {name, entries}, print {value}, probe {nonce, actions}, sleep {ms}, never, flood {parallel}, exit {code}, forever.
+// tree {name, entries}, print {value}, git-dirs (.git and sub/.GIT), probe {nonce, actions}, sleep {ms}, never, flood {parallel},
+// exit {code}, forever. Probe actions: read, list, environ-names {pid}, append, truncate, rename, unlink, create, write, resolve, connect,
+// dns, http.
 async function script() {
   const open = {};
   const steps = JSON.parse(fs.readFileSync(STEPS, 'utf8'));
   for (const step of steps) {
-    if (step.do === 'request') { const answer = await modelRequest({ host: step.host ?? null, suffix: step.suffix ?? '/responses' }); print({ stub: 'step' }); print({ stub: 'answer', status: answer.status ?? null, error: answer.error ?? null }); }
+    if (step.do === 'request') { const answer = await modelRequest({ host: step.host ?? null, suffix: step.suffix ?? '/responses', socket: step.socket === true }); print({ stub: 'step' }); print({ stub: 'answer', status: answer.status ?? null, error: answer.error ?? null }); }
     else if (step.do === 'open') {
       const entry = { head: null };
       entry.done = modelRequest({ handle: req => { entry.req = req; }, onHead: res => { entry.head = res.statusCode; } });
@@ -178,6 +181,7 @@ async function script() {
       fs.mkdirSync(path.join(dir, step.name));
       for (let index = 0; index < step.entries; index += 1) fs.writeFileSync(path.join(dir, step.name, String(index)), '');
     } else if (step.do === 'print') print(step.value);
+    else if (step.do === 'git-dirs') { fs.mkdirSync(path.join(dir, '.git')); fs.mkdirSync(path.join(dir, 'sub', '.GIT'), { recursive: true }); }
     else if (step.do === 'write') fs.writeFileSync(path.join(dir, step.name), Buffer.alloc(step.bytes, 120));
     else if (step.do === 'grow') {
       const file = path.join(dir, step.name);

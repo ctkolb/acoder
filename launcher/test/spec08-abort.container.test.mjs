@@ -8,18 +8,26 @@ import { agentLines, assertStagingGone, withContainerRun } from './helpers/conta
 const t = (name, fn, timeout = 240000) => nodeTest(name, { timeout, skip: SKIP }, fn);
 
 // S4-AC13 (R5-02, R9-01/02) spec08-abort through the container relay: a client abort of a stream BEFORE its usage, while admissions are
-// open and a token limit is set, is usage_unreported; the next request is refused with acoder_usage_unreported.
+// open and a token limit is set, is usage_unreported; the next request (sent at once after the abort, straight to the request socket) is
+// refused. Owner decision: the launcher's STOP follows the sidecar's limit event within milliseconds, so the next request is either refused
+// with acoder_usage_unreported or reset by the stop; it never gets an answer, and nothing is admitted after the latch (the sidecar's 429 at
+// the latch itself is the S3 unit test spec08-abort).
 t('spec08-abort: a pre-usage client abort with admissions open and a token limit ends usage_unreported; the next request is refused', async () => {
   await withContainerRun({
     scenario: 'script', wallSeconds: 60, limits: { tokens: 1000 }, answers: { sequence: ['hold'] },
-    steps: [{ do: 'open', id: 's' }, { do: 'wait-head', id: 's' }, { do: 'abort', id: 's', afterMs: 300 }, { do: 'sleep', ms: 500 }, { do: 'request' }, { do: 'forever' }],
+    steps: [{ do: 'open', id: 's' }, { do: 'wait-head', id: 's' }, { do: 'abort', id: 's', afterMs: 300 }, { do: 'request', socket: true }, { do: 'forever' }],
   }, async ({ record, fx, endpointCount }) => {
     assert.ok(record !== null && record.agent_started === true, 'the agent ran');
     assert.deepEqual([record.exit_reason, record.error_detail], ['error', 'usage_unreported'], JSON.stringify(record.conditions));
     const answers = agentLines(record).filter(line => line.stub === 'answer');
-    assert.equal(answers[0]?.status, 429, 'the next request was refused');
-    assert.equal(record.egress_totals.refused_by_reason.acoder_usage_unreported, 1);
-    assert.equal(endpointCount(), 1, 'only the aborted stream reached the endpoint');
+    assert.equal(answers.length, 1, 'the next request ended');
+    assert.ok(answers[0].status === 429 || (answers[0].status === null && answers[0].error !== null), `the next request was refused or reset by the stop: ${JSON.stringify(answers[0])}`);
+    if (answers[0].status === 429) assert.equal(record.egress_totals.refused_by_reason.acoder_usage_unreported, 1);
+    const forwarded = record.egress_log.filter(entry => entry.phase === 'agent' && entry.decision === 'forwarded');
+    const latch = Date.parse(forwarded[0].closed);
+    assert.ok(forwarded.slice(1).every(entry => Date.parse(entry.opened) <= latch), `nothing was admitted after the latch: ${JSON.stringify(forwarded)}`);
+    assert.ok(forwarded.every(entry => entry.status === null || entry.complete === false), 'no forwarded request completed');
+    assert.ok(endpointCount() <= forwarded.length, 'only admitted requests reached the endpoint');
     assertStagingGone({ fx, record });
   });
 });
