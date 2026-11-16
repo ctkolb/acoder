@@ -220,17 +220,21 @@ export function containerDeps(options, context) {
 // afterStop}(info, context), afterSnapshot(info, context), endpoint, answers, forbidden, ownNetwork (the launcher creates EXT itself; the
 // stub endpoint is then out of its reach), skillFiles, tag, fixture.
 export async function withContainerRun(options, fn) {
-  return withContainerEnv(options, async context => {
-    const parsed = parseReviewRun(context.argv());
-    const settings = resolveSettings({ options: parsed, owner: {}, defaults: loadDefaults(), adapters: { ...adapters, stub }, providers });
-    settings.limits.wall_seconds = options.wallSeconds ?? 60;
-    Object.assign(settings.limits, options.limits ?? {});
-    const env = { PATH: process.env.PATH, HOME: process.env.HOME, ACODER_MODEL_API_KEY: context.fx.key, ...(options.env ?? {}) };
-    const result = await mustAsync(() => runReview({ options: parsed, settings, env }, containerDeps(options, context)));
-    const record = result.record !== '-' && fs.existsSync(result.record) ? JSON.parse(fs.readFileSync(result.record, 'utf8')) : null;
-    const runLeft = await listLabelled(`label=acoder.run=${result.run_id}`);
-    return fn({ ...context, result, record, runLeft, marker: path.join(context.fx.writable.scratch, MARKER), check: id => record?.isolation_checks.find(entry => entry.id === id) });
-  });
+  return withContainerEnv(options, async context => fn({ ...context, ...(await runInContext(options, context)) }));
+}
+
+// One runReview in the topology of withContainerEnv (a test may launch twice in the same fixture); returns {result, record, runLeft,
+// marker, check(id)}.
+export async function runInContext(options, context) {
+  const parsed = parseReviewRun(context.argv());
+  const settings = resolveSettings({ options: parsed, owner: {}, defaults: loadDefaults(), adapters: { ...adapters, stub }, providers });
+  settings.limits.wall_seconds = options.wallSeconds ?? 60;
+  Object.assign(settings.limits, options.limits ?? {});
+  const env = { PATH: process.env.PATH, HOME: process.env.HOME, ACODER_MODEL_API_KEY: context.fx.key, ...(options.env ?? {}) };
+  const result = await mustAsync(() => runReview({ options: parsed, settings, env }, containerDeps(options, context)));
+  const record = result.record !== '-' && fs.existsSync(result.record) ? JSON.parse(fs.readFileSync(result.record, 'utf8')) : null;
+  const runLeft = await listLabelled(`label=acoder.run=${result.run_id}`);
+  return { result, record, runLeft, marker: path.join(context.fx.writable.scratch, MARKER), check: id => record?.isolation_checks.find(entry => entry.id === id) };
 }
 
 // The agent's own output lines in the log of a run (each written as `<time> agent <line>`), parsed when they are JSON.

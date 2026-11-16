@@ -704,3 +704,7 @@ async function finishStarted(ctx, { runtime, names, options, settings, writable,
   writeRecord(recordPaths.record, record, redactor);
   return { outcome: decision.outcome, exit_code: decision.exit_code, record: recordPaths.record, tag: ctx.tag, run_id: ctx.runId, leftovers };
 }
+
+// Placeholders of part 2 (red commit): replaced by the implementation.
+export const scratchFacts = () => ({ git_entries: 0, symlinks_outside: 0, complete: true });
+export const egressLogOf = () => ({ log: [], truncated: false });

@@ -70,9 +70,9 @@ function modelRequest({ socket = false, host = null, suffix = '/responses', body
   });
 }
 
-function writeReports() {
-  fs.writeFileSync(reports.md, `# stub report ${tag}\n`);
-  fs.writeFileSync(reports.json, `${JSON.stringify({ session: tag, status: 'ready' })}\n`);
+function writeReports({ md = `# stub report ${tag}\n`, json = `${JSON.stringify({ session: tag, status: 'ready' })}\n` } = {}) {
+  if (md !== null) fs.writeFileSync(reports.md, md);
+  if (json !== null) fs.writeFileSync(reports.json, json);
 }
 
 // The `probe` step (A11 proof of inside): read, list, write, resolve, connect and DNS attempts, each with its result.
@@ -154,8 +154,9 @@ async function flood(parallel) {
   await Promise.all(Array.from({ length: parallel }, loop));
 }
 
-// script steps: request, open {id}, abort {id, afterMs}, wait-head {id}, reports, write {name, bytes}, grow {name, bytes, everyMs},
-// mkfifo {name}, mkdir {name, mode}, probe {nonce, actions}, sleep {ms}, never, flood {parallel}, exit {code}, forever.
+// script steps: request, open {id}, abort {id, afterMs}, wait-head {id}, reports {md, json, jsonPad} (text, or null for none; jsonPad: a padded JSON report), write {name, bytes},
+// grow {name, bytes, everyMs}, link {name, target}, churn {ms} (files created and removed at once), mkfifo {name}, mkdir {name, mode},
+// tree {name, entries}, print {value}, probe {nonce, actions}, sleep {ms}, never, flood {parallel}, exit {code}, forever.
 async function script() {
   const open = {};
   const steps = JSON.parse(fs.readFileSync(STEPS, 'utf8'));
@@ -168,7 +169,15 @@ async function script() {
       print({ stub: 'step' });
     } else if (step.do === 'wait-head') { const end = Date.now() + (step.ms ?? 20000); while (open[step.id].head === null && Date.now() < end) await sleep(20); }
     else if (step.do === 'abort') { await sleep(step.afterMs ?? 0); open[step.id].req.destroy(); }
-    else if (step.do === 'reports') writeReports();
+    else if (step.do === 'reports') writeReports(step.jsonPad ? { ...step, json: JSON.stringify({ session: tag, pad: 'x'.repeat(step.jsonPad) }) } : step);
+    else if (step.do === 'link') fs.symlinkSync(step.target, path.join(dir, step.name));
+    else if (step.do === 'churn') {
+      const end = Date.now() + step.ms;
+      for (let index = 0; Date.now() < end; index += 1) { const file = path.join(dir, `churn-${index % 50}`); fs.writeFileSync(file, 'x'); fs.rmSync(file); if (index % 20 === 0) await sleep(1); }
+    } else if (step.do === 'tree') {
+      fs.mkdirSync(path.join(dir, step.name));
+      for (let index = 0; index < step.entries; index += 1) fs.writeFileSync(path.join(dir, step.name, String(index)), '');
+    } else if (step.do === 'print') print(step.value);
     else if (step.do === 'write') fs.writeFileSync(path.join(dir, step.name), Buffer.alloc(step.bytes, 120));
     else if (step.do === 'grow') {
       const file = path.join(dir, step.name);
