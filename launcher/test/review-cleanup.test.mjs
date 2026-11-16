@@ -61,7 +61,12 @@ async function cleanup(fx, runtime, args = ['--mailbox', fx.mailbox, '--ticket',
   const fake = makeFakeRuntime();
   try { return await runMain(['review', 'cleanup', ...args], { env: fake.env(), deps: { runtime: runtime.seam } }); } finally { fake.cleanup(); }
 }
-const crashedOf = fx => JSON.parse(fs.readFileSync(path.join(fx.stage, `run-${fx.tag}.crashed.json`), 'utf8'));
+// The crashed file of A6.9; its absence is an assertion failure, not a read error.
+function crashedOf(fx) {
+  const file = path.join(fx.stage, `run-${fx.tag}.crashed.json`);
+  assert.ok(fs.existsSync(file), 'the crashed file was written');
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
 const creating = calls => calls.filter(args => ['create', 'run', 'start'].includes(args[0]) || args[1] === 'create');
 
 // A6.9 / A1.4: `acoder review cleanup --mailbox <dir> --ticket <file>`; a usage error is exit 2 with one line and no effect.

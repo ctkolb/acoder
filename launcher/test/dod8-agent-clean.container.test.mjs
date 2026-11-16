@@ -33,6 +33,9 @@ t('dod8-agent-clean: nothing the agent can read holds the key in any form; the d
     assert.ok(dump.length > 1000, 'the dump was written');
     const env = JSON.parse(/^env (.*)$/m.exec(dump)[1]);
     assert.equal(env.ACODER_TAG, fx.tag, 'control 1: the marker the test put into an allowed agent variable is in the dump');
+    // A8.3: the supervisor constructs the agent's environment from the planned names only (nothing of its own, no runtime-injected name).
+    const constructed = ['ACODER_CONTAINER', 'ACODER_EVENT_PREFIX', 'ACODER_PROBE_INPUT', 'ACODER_RUN_ID', 'ACODER_TAG', 'ACODER_TICKET_SHA256', 'HOME', 'STUB_API_KEY', 'STUB_BASE_URL', 'TMPDIR', ...record.image.env_names];
+    assert.deepEqual(Object.keys(env).sort(), [...new Set(constructed)].sort(), 'the agent process has exactly the constructed names');
     assert.ok(/^\/proc\/1\/environ /m.test(dump) && /^file \/acoder\/run\.json /m.test(dump) && /^file \/etc\/hosts /m.test(dump), 'the dump covers /proc, /acoder and /etc');
     assert.match(dump, /^answer \{"status":200/m, 'the dump holds the answer the agent got');
     for (const [name, text] of [['dump', dump], ['md report', read(fx.writable.reportMd)], ['json report', read(fx.writable.reportJson)], ['log', read(record.log_path)],

@@ -157,7 +157,7 @@ async function flood(parallel) {
 
 // script steps: request {host, suffix, socket}, open {id}, abort {id, afterMs}, wait-head {id}, reports {md, json, jsonPad} (text, or null for none; jsonPad: a padded JSON report), write {name, bytes},
 // grow {name, bytes, everyMs}, link {name, target}, churn {ms} (files created and removed at once), mkfifo {name}, mkdir {name, mode},
-// tree {name, entries}, print {value}, git-dirs (.git and sub/.GIT), probe {nonce, actions}, sleep {ms}, never, flood {parallel},
+// tree {name, entries}, print {value, or parts joined at run time}, git-dirs (.git and sub/.GIT), probe {nonce, actions}, sleep {ms}, never, flood {parallel},
 // exit {code}, forever. Probe actions: read, list, environ-names {pid}, append, truncate, rename, unlink, create, write, resolve, connect,
 // dns, http.
 async function script() {
@@ -180,7 +180,7 @@ async function script() {
     } else if (step.do === 'tree') {
       fs.mkdirSync(path.join(dir, step.name));
       for (let index = 0; index < step.entries; index += 1) fs.writeFileSync(path.join(dir, step.name, String(index)), '');
-    } else if (step.do === 'print') print(step.value);
+    } else if (step.do === 'print') print(Array.isArray(step.parts) ? step.parts.join('') : step.value);
     else if (step.do === 'git-dirs') { fs.mkdirSync(path.join(dir, '.git')); fs.mkdirSync(path.join(dir, 'sub', '.GIT'), { recursive: true }); }
     else if (step.do === 'write') fs.writeFileSync(path.join(dir, step.name), Buffer.alloc(step.bytes, 120));
     else if (step.do === 'grow') {
