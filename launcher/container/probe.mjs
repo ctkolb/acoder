@@ -262,7 +262,10 @@ export async function probeP8(input, { env = process.env, uid = process.getuid()
   if (field('CapEff') === null || !/^0+$/.test(field('CapEff'))) return fail('P8', 'capabilities');
   if (field('NoNewPrivs') !== '1') return fail('P8', 'no_new_privileges');
   if (field('Seccomp') !== '2') return fail('P8', 'seccomp');
-  return pass('P8');
+  // A8.3: the injected names seen besides the plan (all of the allowance, checked above) as one fixed code: injected_<lower-case names,
+  // sorted, joined by _> or injected_none; the launcher records it as injected:<names>.
+  const injected = names.filter(name => !planned.has(name)).map(name => name.toLowerCase()).sort();
+  return { id: 'P8', result: 'pass', detail: `injected_${injected.length === 0 ? 'none' : injected.join('_')}` };
 }
 
 // All eight, in order; a probe that throws counts as failed.

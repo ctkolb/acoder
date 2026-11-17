@@ -115,21 +115,29 @@ export function createRuntime({ name, bin, env, runId, deps = {} }) {
     return Array.isArray(parsed) && parsed.length === 1 && parsed[0] !== null && typeof parsed[0] === 'object' ? parsed[0] : null;
   }
 
-  // A6.7: removes the run's containers, then the volume, then the network (each only when named); resolves the names that remain.
+  // A6.7 (R37-03): whether a resource whose removal failed may still exist. Only a SUCCESSFUL listing scoped to the run label that lacks
+  // the name shows it gone; a listing that fails (non-zero exit, timeout) or prints something that is not a list of names leaves the
+  // resource unconfirmed, so it stays among the leftovers.
+  const LISTINGS = { container: ['ps', '--all', '{{.Names}}'], volume: ['volume', 'ls', '{{.Name}}'], network: ['network', 'ls', '{{.Name}}'] };
+  async function mayRemain(kind, resource) {
+    const [command, sub, format] = LISTINGS[kind];
+    const result = await call([command, sub, '--filter', `label=${label}`, '--format', format], { timeoutMs: ANSWER_TIMEOUT_MS });
+    const lines = result.stdout.split('\n').map(line => line.trim()).filter(line => line !== '');
+    if (result.code !== 0 || !lines.every(line => /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(line))) return true;
+    return lines.includes(resource);
+  }
+  async function removeOne(kind, args, resource) {
+    const result = await call(args);
+    return result.code !== 0 && await mayRemain(kind, resource);
+  }
+
+  // A6.7: removes the run's containers, then the volume, then the network (each only when named); resolves the names that remain or whose
+  // absence could not be confirmed.
   async function remove({ containers = [], volume = null, network = null }) {
     const leftovers = [];
-    for (const container of containers) {
-      await call(['rm', '--force', container]);
-      if (await inspect('container', container) !== null) leftovers.push(container);
-    }
-    if (volume !== null) {
-      await call(['volume', 'rm', '--force', volume]);
-      if (await inspect('volume', volume) !== null) leftovers.push(volume);
-    }
-    if (network !== null) {
-      await call(['network', 'rm', network]);
-      if (await inspect('network', network) !== null) leftovers.push(network);
-    }
+    for (const container of containers) if (await removeOne('container', ['rm', '--force', container], container)) leftovers.push(container);
+    if (volume !== null && await removeOne('volume', ['volume', 'rm', '--force', volume], volume)) leftovers.push(volume);
+    if (network !== null && await removeOne('network', ['network', 'rm', network], network)) leftovers.push(network);
     return leftovers;
   }
 

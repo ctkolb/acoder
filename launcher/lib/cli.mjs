@@ -90,6 +90,7 @@ async function reviewRun(argv, env, deps, io) {
     if (!options.dryRun) {
       const result = await runReview({ options, settings, env }, deps);
       for (const leftover of result.leftovers ?? []) io.stderr.write(`leftover: ${safe(leftover)}\n`);
+      if (typeof result.error === 'string') io.stderr.write(`error: ${safe(result.error)}\n`);
       io.stdout.write(`${formatLastLine({ tag: result.tag, outcome: result.outcome, record: result.record })}\n`);
       return result.exit_code;
     }

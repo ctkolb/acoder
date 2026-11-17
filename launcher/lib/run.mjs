@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { parseEventLine, parseSupervisorLine } from './events.mjs';
 import { PLACEHOLDER_KEY, agentEnvNames, buildPlan, containerBaseUrl, endpointParts, hostsFile, resolvConf } from './plan.mjs';
 import { checkImageAndRuntime, prepare } from './prepare.mjs';
-import { buildRecord, canonicalHash, makeRunId, preparedSections, recordNames, writeRecord } from './record.mjs';
-import { createRedactor, emptyScan, scanTree } from './redact.mjs';
+import { buildRecord, canonicalHash, launcherSection, makeRunId, preparedSections, recordNames, writeRecord } from './record.mjs';
+import { createRedactor, emptyScan, SCAN_BOUNDS, scanTree } from './redact.mjs';
 import { createRuntime, findRuntime } from './runtime.mjs';
 import { createDiskController } from './budget.mjs';
 import { Refusal, safe } from './refusal.mjs';
@@ -119,20 +119,30 @@ function tmpfsOptions(createArgs) {
 }
 
 const HOST_MNT = '/host_mnt';
+// Docker Desktop reports the two single-file binds over /etc/hosts and /etc/resolv.conf with its VM prefix /host_mnt before the host path
+// (r35 deviation 8). The prefix is removed there only; every other source is compared exactly as reported (F-38-08).
+const HOST_MNT_TARGETS = ['/etc/hosts', '/etc/resolv.conf'];
+const MOUNT_KINDS = ['bind', 'volume', 'tmpfs'];
 
-// The mounts of an inspected container in the shape of A9 (kind, source, target, mode), tmpfs options kept for H2.
+// The mounts of an inspected container in the shape of A9 (kind, source, target, mode), tmpfs options kept for H2. A mount whose type is
+// not one of the three, or whose read-write flag is not a boolean, is marked `unknown` (it fails H2 and H3) and recorded as a read-write
+// bind: a mount is never read as read-only without the runtime saying so.
 export function inspectedMounts(info, container, planMounts = []) {
   const out = [];
   for (const mount of Array.isArray(info?.Mounts) ? info.Mounts : []) {
-    const kind = mount.Type === 'volume' ? 'volume' : mount.Type === 'tmpfs' ? 'tmpfs' : 'bind';
+    const known = MOUNT_KINDS.includes(mount.Type) && typeof mount.RW === 'boolean';
+    const kind = MOUNT_KINDS.includes(mount.Type) ? mount.Type : 'bind';
     const target = mount.Destination;
     const planned = planMounts.find(entry => entry.container === container && entry.target === target);
-    // Docker Desktop reports a single-file bind over /etc/hosts or /etc/resolv.conf with its VM prefix /host_mnt before the host path.
-    const source = kind === 'volume' ? (mount.Name ?? null) : typeof mount.Source === 'string' && mount.Source.startsWith(`${HOST_MNT}/`) ? mount.Source.slice(HOST_MNT.length) : (mount.Source ?? null);
-    out.push({ container, target, source, kind, mode: mount.RW ? 'rw' : 'ro', persistent: kind === 'bind', role: planned?.role ?? (kind === 'volume' ? 'socket' : 'payload'), options: mount.Type === 'tmpfs' ? null : undefined });
+    const prefixed = HOST_MNT_TARGETS.includes(target) && typeof mount.Source === 'string' && mount.Source.startsWith(`${HOST_MNT}/`);
+    const source = kind === 'volume' ? (mount.Name ?? null) : prefixed ? mount.Source.slice(HOST_MNT.length) : (mount.Source ?? null);
+    out.push({
+      container, target, source, kind, mode: mount.RW === false ? 'ro' : 'rw', persistent: kind === 'bind', role: planned?.role ?? (kind === 'volume' ? 'socket' : 'payload'),
+      options: kind === 'tmpfs' ? null : undefined, unknown: !known,
+    });
   }
   for (const [target, options] of Object.entries(info?.HostConfig?.Tmpfs ?? {})) {
-    out.push({ container, target, source: null, kind: 'tmpfs', mode: 'rw', persistent: false, role: 'work', options });
+    out.push({ container, target, source: null, kind: 'tmpfs', mode: 'rw', persistent: false, role: 'work', options: typeof options === 'string' && options !== '' ? options : null, unknown: false });
   }
   return out;
 }
@@ -147,8 +157,10 @@ function inPlanOrder(mounts, planMounts) {
 function sameMounts(info, plan, container) {
   const planned = plan.mounts.filter(mount => mount.container === container);
   const options = tmpfsOptions(container === 'agent' ? plan.agent.create : plan.egress.create);
-  const key = mount => JSON.stringify([mount.target, mount.kind, mount.kind === 'tmpfs' ? null : mount.source, mount.mode, mount.kind === 'tmpfs' ? (mount.options ?? options[mount.target]) : null]);
-  const seen = inspectedMounts(info, container, plan.mounts).map(key).sort();
+  const key = mount => JSON.stringify([mount.target, mount.kind, mount.kind === 'tmpfs' ? null : mount.source, mount.mode, mount.kind === 'tmpfs' ? mount.options : null]);
+  const inspected = inspectedMounts(info, container, plan.mounts);
+  if (inspected.some(mount => mount.unknown)) return false;
+  const seen = inspected.map(key).sort();
   const wanted = planned.map(mount => key({ ...mount, options: options[mount.target] })).sort();
   return JSON.stringify(seen) === JSON.stringify(wanted);
 }
@@ -218,8 +230,13 @@ export function checkH4(volume, network, plan, { networkCreated, sidecarId }) {
   return ok();
 }
 
+// A8.3: the injected names a check observed besides the plan, as one fixed code of the record: injected:<names sorted, comma-joined>, or
+// injected:none. Only names of the runtime's allowance get here (anything else has already failed the check), never a value.
+const injectedCode = names => `injected:${names.length === 0 ? 'none' : [...names].sort().join(',')}`;
+
 // U1 (with D-R32): the ready event's configuration hash and variable names, the phase from the first probe answer (the first local request
-// event: phase probe), and both clock samples inside their brackets (A3.6: bracket 0 to 10000 ms, sample within it widened by 1000 ms).
+// event: phase probe), and both clock samples inside their brackets (A3.6: bracket 0 to 10000 ms, sample within it widened by 1000 ms). A
+// pass records the injected names the sidecar showed (A8.3).
 export function checkU1({ ready, readyCount, firstLocal, clocks }, { configSha256, envNames, allowance }) {
   if (readyCount !== 1 || ready === null) return bad('ready_missing');
   if (ready.config_sha256 !== configSha256) return bad('config_hash');
@@ -231,7 +248,22 @@ export function checkU1({ ready, readyCount, firstLocal, clocks }, { configSha25
     const length = clock.end - clock.start;
     if (length < 0 || length > 10000 || clock.sample < clock.start - 1000 || clock.sample > clock.end + 1000) return bad('clock_skew');
   }
-  return ok();
+  return { result: 'pass', detail: injectedCode(ready.env_names.filter(name => !envNames.includes(name))) };
+}
+
+// A8.3: P8's pass carries the injected names as a code of the event protocol (fixed lower-case codes only): injected_<names in lower case,
+// sorted, joined by _> or injected_none. The record holds them as injected:<names> of this runtime's allowance; a code that names anything
+// else, a name twice or out of order is a protocol failure. A failed P8 is kept as it is.
+export function p8Record(entry, allowance) {
+  if (entry.result !== 'pass') return { result: entry.result, detail: entry.detail };
+  const match = /^injected_([a-z]+(?:_[a-z]+)*)$/.exec(entry.detail ?? '');
+  if (match === null) return bad('protocol');
+  if (match[1] === 'none') return { result: 'pass', detail: injectedCode([]) };
+  const byCode = new Map(allowance.map(name => [name.toLowerCase(), name]));
+  const parts = match[1].split('_');
+  const names = parts.map(part => byCode.get(part));
+  const ordered = parts.every((part, index) => index === 0 || parts[index - 1] < part);
+  return names.every(name => name !== undefined) && ordered ? { result: 'pass', detail: injectedCode(names) } : bad('protocol');
 }
 
 export function checkU2(upstreams, host) {
@@ -301,6 +333,13 @@ function notifier() {
   };
 }
 
+// A bounded wait whose timer ends with it: a timer left running would keep the launcher process alive after its result (F-38-10).
+function within(promise, ms, fallback = undefined) {
+  let timer;
+  const late = new Promise(resolve => { timer = setTimeout(() => resolve(fallback), ms); });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
 // The lines of a stream, one call per complete line.
 function eachLine(stream, onLine) {
   let pending = '';
@@ -345,13 +384,31 @@ const hex = bytes => randomBytes(bytes).toString('hex');
 
 function lstatOrNull(file) { try { return fs.lstatSync(file); } catch { return null; } }
 
-// A9 reports: regular files read with no-follow.
-function reportFacts(writable, tag) {
+// A9 reports: regular files read with no-follow, at most the scan's report bound (A8.6, F-38-09). A report over the bound, or one that
+// cannot be opened or read, is recorded by its size only (no hash, it does not parse): it is never read into memory. io and maxBytes are
+// test seams (the file system functions used, the bound).
+export function reportFacts(writable, tag, { io = fs, maxBytes = SCAN_BOUNDS.reportMaxBytes } = {}) {
   const read = file => {
-    const info = lstatOrNull(file);
+    let info;
+    try { info = io.lstatSync(file); } catch { info = null; }
     if (info === null || !info.isFile()) return { exists: false, bytes: 0, sha256: null, text: null };
-    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-    try { const data = fs.readFileSync(fd); return { exists: true, bytes: data.length, sha256: createHash('sha256').update(data).digest('hex'), text: data.toString('utf8') }; } finally { fs.closeSync(fd); }
+    const unread = bytes => ({ exists: true, bytes, sha256: null, text: null });
+    let fd;
+    try { fd = io.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); } catch { return unread(info.size); }
+    try {
+      const opened = io.fstatSync(fd);
+      if (!opened.isFile() || opened.size > maxBytes) return unread(opened.size);
+      // One byte more than the bound: a file that grew past it since the stat is still not read whole.
+      const buffer = Buffer.alloc(opened.size + 1);
+      let length = 0;
+      for (let got = -1; got !== 0 && length < buffer.length;) {
+        got = io.readSync(fd, buffer, length, buffer.length - length, null);
+        length += got;
+      }
+      if (length > maxBytes || length > opened.size) return unread(Math.max(length, opened.size));
+      const data = buffer.subarray(0, length);
+      return { exists: true, bytes: length, sha256: createHash('sha256').update(data).digest('hex'), text: data.toString('utf8') };
+    } catch { return unread(info.size); } finally { io.closeSync(fd); }
   };
   const md = read(writable.reportMd);
   const json = read(writable.reportJson);
@@ -433,7 +490,11 @@ async function launch({ options, settings, env }, deps, { changed, interrupt }) 
   let sidecar = null;
   let supervisor = null;
   try {
-    // E2: the mailbox effects (A2.3.4) and the log.
+    // E2: the mailbox effects (A2.3.4) and the log. The log's path is known before any effect: when an exclusive creation fails part way
+    // (a report file already exists), the log and the not-started record are still written beside it (A6.6, F-38-02); what exists is
+    // never overwritten or removed.
+    ctx.logPath = recordNames({ stageDir: writable.stage, tag, runId, started: false }).log;
+    const openLog = () => fs.openSync(ctx.logPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
     try {
       fs.mkdirSync(writable.scratch, { mode: 0o700 });
       for (const [label, file] of [['md', writable.reportMd], ['json', writable.reportJson]]) {
@@ -442,9 +503,11 @@ async function launch({ options, settings, env }, deps, { changed, interrupt }) 
         if (!info.isFile() || info.nlink !== 1) throw new Error('a report file is not a new regular file');
         ctx.reportInodes[label] = info.ino;
       }
-      ctx.logPath = recordNames({ stageDir: writable.stage, tag, runId, started: false }).log;
-      log = fs.openSync(ctx.logPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-    } catch (error) { throw new Boundary('E2', 'runtime_failure', error); }
+      log = openLog();
+    } catch (error) {
+      if (log === null) { try { log = openLog(); } catch { /* the stage folder takes no log; the record is attempted and its failure reported */ } }
+      throw new Boundary('E2', 'runtime_failure', error);
+    }
     logLine('launcher', `run ${runId} tag ${tag}`);
 
     // E3: payloads, volume, network EXT, the sidecar (created, checked by H3 and H4, started), the agent container (created, checked by H1, H2).
@@ -456,6 +519,11 @@ async function launch({ options, settings, env }, deps, { changed, interrupt }) 
       ctx.basePlan = planFor(planArgs);
       ctx.plan = transform(structuredClone(ctx.basePlan));
       stagePayloads({ plan: ctx.plan, prepared, options, sidecarProgram: deps.sidecarProgram ?? null });
+      // A9 (F-38-01): the payload and skill hashes, taken once from the trees just staged (the trees the containers mount); every record
+      // of this attempt carries these values, also after the staging directory is gone.
+      ctx.launcher = Object.freeze(launcherSection({
+        version: LAUNCHER_VERSION, agentPayload: path.join(prepared.staging.dir, 'agent-payload'), egressPayload: path.join(prepared.staging.dir, 'egress-payload'), skill: prepared.staging.skill,
+      }));
       ctx.inputsHash = inputsHash(prepared);
       const must = async (args, extra = {}) => {
         const result = await runtime.call(args, extra);
@@ -568,7 +636,8 @@ async function launch({ options, settings, env }, deps, { changed, interrupt }) 
     const results = probes.length === 1 && !ctx.supervisorInvalid && inTime ? corroborate(probes[0].results, ctx.requests, nonce) : [];
     for (const id of CHECK_IDS.filter(name => name.startsWith('P'))) {
       const found = results.filter(entry => entry.id === id);
-      ctx.checks[id] = found.length === 1 ? { result: found[0].result, detail: found[0].detail } : bad(probes.length === 0 ? 'probes_missing' : 'protocol');
+      const entry = found.length === 1 ? { result: found[0].result, detail: found[0].detail } : bad(probes.length === 0 ? 'probes_missing' : 'protocol');
+      ctx.checks[id] = id === 'P8' && found.length === 1 ? p8Record(entry, INJECTED_ENV[runtime.name]) : entry;
     }
     if (CHECK_IDS.some(id => ctx.checks[id].result !== 'pass')) throw new Boundary('G', 'gate_failed');
 
@@ -642,8 +711,8 @@ async function launch({ options, settings, env }, deps, { changed, interrupt }) 
       if (ctx.summary === null) { ctx.conditions.add('egress_protocol_error'); await runtime.call(['kill', names.egress]); }
       if (agentRunning()) await signalAgent(['stop', '--time', String(STOP_GRACE_SECONDS), names.agent]);
     }
-    const agentExit = await Promise.race([supervisor.exited, new Promise(resolve => setTimeout(() => resolve({ code: null, signal: null }), 30000))]);
-    await Promise.race([sidecar.exited, new Promise(resolve => setTimeout(resolve, 15000))]);
+    const agentExit = await within(supervisor.exited, 30000, { code: null, signal: null });
+    await within(sidecar.exited, 15000);
     await hooks.afterStop?.({ runId, names, staging: prepared.staging.dir, snapshot: prepared.staging.mailbox });
     const parsed = ctx.parser.result();
     const code = agentExit.code;
@@ -743,21 +812,19 @@ export function scratchFacts(scratch, bounds = {}) {
 
 function recordValuesOf(ctx, { options, settings, writable, now, launched, elapsedSeconds, names }) {
   const { prepared, checked } = ctx;
-  const payload = dir => { try { return canonicalHash(dir); } catch { return '0'.repeat(64); } };
+  // An attempt that ended before its payloads were staged mounted nothing: its hashes are all zero.
+  const unstaged = '0'.repeat(64);
   const totals = totalsFrom(ctx);
   const egress = egressLogOf(ctx.requests);
   const sections = preparedSections(prepared, options);
   return {
     run_id: ctx.runId, tag: ctx.tag,
-    launcher: {
-      version: LAUNCHER_VERSION, agent_payload_sha256: payload(path.join(prepared.staging.dir, 'agent-payload')), egress_payload_sha256: payload(path.join(prepared.staging.dir, 'egress-payload')),
-      skill_sha256: payload(prepared.staging.skill),
-    },
+    launcher: { ...(ctx.launcher ?? { version: LAUNCHER_VERSION, agent_payload_sha256: unstaged, egress_payload_sha256: unstaged, skill_sha256: unstaged }) },
     agent: { name: settings.agent, cli_version: null, model: settings.model, effort: settings.effort },
     provider: { id: settings.provider, endpoint: settings.endpoint, max_in_flight: settings.limits.max_in_flight },
     ...sections, inputs: { ...sections.inputs, ...(ctx.inputs ?? {}) },
     image: checked.image, runtime: checked.runtime,
-    mounts: inPlanOrder(ctx.mounts, ctx.basePlan?.mounts ?? []).map(({ options: unused, ...mount }) => mount), plan_mounts: ctx.basePlan?.mounts ?? [],
+    mounts: inPlanOrder(ctx.mounts, ctx.basePlan?.mounts ?? []).map(({ options: unusedOptions, unknown: unusedUnknown, ...mount }) => mount), plan_mounts: ctx.basePlan?.mounts ?? [],
     network: {
       agent_network: 'none', egress_network: names.network, egress_network_created: ctx.created.network, allowlist: ctx.basePlan?.allowlist ?? [endpointParts(settings.endpoint).host],
       extra_ca_cert: options.extraCaCert !== null,
@@ -786,7 +853,7 @@ function removeEmptyReports(ctx, writable, onlyOwn) {
 // A not-started attempt (states E2 to R before the started file): containers and resources removed, empty reports and the empty scratch
 // directory removed, the not-started record and log kept (A6.6). Exit code 1, outcome not-started.
 async function finishNotStarted(ctx, boundary, { runtime, names, options, settings, writable, redactor, now, launched, elapsedSeconds, sidecar, supervisor }) {
-  await Promise.race([Promise.all([sidecar?.exited, supervisor?.exited].filter(Boolean)), new Promise(resolve => setTimeout(resolve, 15000))]);
+  await within(Promise.all([sidecar?.exited, supervisor?.exited].filter(Boolean)), 15000);
   const leftovers = await cleanupRun(ctx, runtime, names);
   leftovers.push(...removeEmptyReports(ctx, writable, true));
   try { if (lstatOrNull(writable.scratch)?.isDirectory()) fs.rmdirSync(writable.scratch); } catch { leftovers.push(writable.scratch); }
@@ -801,8 +868,11 @@ async function finishNotStarted(ctx, boundary, { runtime, names, options, settin
   values.reports = reportFacts(writable, ctx.tag);
   values.secret_scan.log_redactions = ctx.logRedactions;
   const file = recordNames({ stageDir: writable.stage, tag: ctx.tag, runId: ctx.runId, started: false }).record;
-  writeRecord(file, buildRecord(values), redactor);
-  return { outcome: 'not-started', exit_code: 1, record: file, tag: ctx.tag, run_id: ctx.runId, leftovers, state: boundary.state, detail: boundary.detail };
+  const record = buildRecord(values);
+  const outcome = { outcome: 'not-started', exit_code: 1, record: file, tag: ctx.tag, run_id: ctx.runId, leftovers, state: boundary.state, detail: boundary.detail };
+  // A stage folder that takes no file: the attempt has no record, and the error names the path that could not be written (F-38-02).
+  try { writeRecord(file, record, redactor); } catch (error) { return { ...outcome, record: '-', error: `the not-started record ${file} could not be written (${error?.code ?? 'failed'})` }; }
+  return outcome;
 }
 
 // A started run: C (the snapshot re-hash while the staging directory exists, cleanup of the runtime resources and the staging directory,

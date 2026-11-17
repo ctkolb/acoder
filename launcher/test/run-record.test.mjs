@@ -117,3 +117,26 @@ t('a launcher process ends promptly once main() returned (no timer of the run ke
     assert.ok(ended - returned < 5000, `the process ended ${ended - returned} ms after main() returned`);
   } finally { fake.cleanup(); }
 }));
+
+// F-38-09, direct: the bytes the record facts read are counted through the file-system seam; a report over the bound (here a small bound
+// and a sparse file of the real bound plus one) is never read, one within it is read once.
+t('A9 reports: the record facts read no byte of a report over the bound and exactly the bytes of one within it', () => withFixture({ noExport: true }, async fx => {
+  const { reportFacts } = await import('../lib/run.mjs');
+  let read = 0;
+  const io = { ...fs, readSync: (...args) => { const got = fs.readSync(...args); read += got; return got; } };
+  fs.writeFileSync(fx.writable.reportMd, 'x'.repeat(100));
+  const fd = fs.openSync(fx.writable.reportJson, 'wx', 0o600);
+  try { fs.ftruncateSync(fd, REPORT_BOUND + 1); } finally { fs.closeSync(fd); }
+  const facts = reportFacts(fx.writable, fx.tag, { io });
+  assert.deepEqual(facts.json, { path: fx.writable.reportJson, exists: true, bytes: REPORT_BOUND + 1, sha256: null, parses: false, session_matches: false });
+  assert.equal(facts.md.sha256, createHash('sha256').update('x'.repeat(100)).digest('hex'));
+  assert.equal(read, 100, 'only the report within the bound was read');
+  read = 0;
+  const small = reportFacts(fx.writable, fx.tag, { io, maxBytes: 99 });
+  assert.deepEqual(small.md, { path: fx.writable.reportMd, exists: true, bytes: 100, sha256: null });
+  assert.equal(read, 0, 'a report one byte over a bound of 99 is not read');
+  fs.chmodSync(fx.writable.reportMd, 0o000);
+  try {
+    assert.deepEqual(reportFacts(fx.writable, fx.tag, { io }).md, { path: fx.writable.reportMd, exists: true, bytes: 100, sha256: null }, 'an unreadable report');
+  } finally { fs.chmodSync(fx.writable.reportMd, 0o600); }
+}));
