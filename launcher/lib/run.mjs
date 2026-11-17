@@ -869,10 +869,12 @@ async function finishNotStarted(ctx, boundary, { runtime, names, options, settin
   values.secret_scan.log_redactions = ctx.logRedactions;
   const file = recordNames({ stageDir: writable.stage, tag: ctx.tag, runId: ctx.runId, started: false }).record;
   const record = buildRecord(values);
-  const outcome = { outcome: 'not-started', exit_code: 1, record: file, tag: ctx.tag, run_id: ctx.runId, leftovers, state: boundary.state, detail: boundary.detail };
   // A stage folder that takes no file: the attempt has no record, and the error names the path that could not be written (F-38-02).
-  try { writeRecord(file, record, redactor); } catch (error) { return { ...outcome, record: '-', error: `the not-started record ${file} could not be written (${error?.code ?? 'failed'})` }; }
-  return outcome;
+  try { writeRecord(file, record, redactor); } catch (failure) {
+    const error = `the not-started record ${file} could not be written (${failure?.code ?? 'failed'})`;
+    return { outcome: 'not-started', exit_code: 1, record: '-', tag: ctx.tag, run_id: ctx.runId, leftovers, state: boundary.state, detail: boundary.detail, error };
+  }
+  return { outcome: 'not-started', exit_code: 1, record: file, tag: ctx.tag, run_id: ctx.runId, leftovers, state: boundary.state, detail: boundary.detail };
 }
 
 // A started run: C (the snapshot re-hash while the staging directory exists, cleanup of the runtime resources and the staging directory,
