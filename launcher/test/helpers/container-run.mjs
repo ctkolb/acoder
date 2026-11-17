@@ -285,8 +285,9 @@ export function assertStopOrder(timeline, { signalRequired = true } = {}) {
 // answer H1 and H2 are decided on and after the sidecar started (and, in a run whose sidecar answered in time, after its ready event); (c)
 // PHASE is written only after the supervisor's probe results and both clock answers arrived (the fourteen results), and RELEASE only after
 // the sidecar acknowledged the phase. failed: the id of the check an adverse fixture fails (null for a healthy run): with H3 or H4 nothing
-// starts; with H1 or H2 the agent container never starts and the sidecar is stopped (its attached start ends) and removed; with any failed
-// check neither PHASE nor RELEASE is written.
+// starts; with H1 or H2 the agent container never starts and the sidecar is stopped (its attached start ends; its removal is the empty
+// runLeft that assertNotStarted checks, since the wrapper's own removal calls do not pass the seam); with any failed check neither PHASE
+// nor RELEASE is written.
 export function assertGateSequence({ timeline, result }, failed = null) {
   const at = predicate => timeline.findIndex(predicate);
   const inspected = (what, match) => at(entry => entry.kind === 'inspect' && entry.what === what && match(entry.name));
@@ -333,7 +334,6 @@ export function assertGateSequence({ timeline, result }, failed = null) {
     assert.equal(agentStart, -1, `${failed} failed: the agent container never started: ${order}`);
     assert.ok(sidecarStart >= 0, `${failed} is decided after the sidecar started (E3 as built): ${order}`);
     assert.ok(at(entry => entry.kind === 'exit' && entry.to === 'sidecar') > sidecarStart, `${failed} failed: the sidecar's attached start ended: ${order}`);
-    assert.ok(at(entry => entry.kind === 'call' && entry.args[0] === 'rm' && isSidecar(String(entry.args.at(-1)))) > sidecarStart, `${failed} failed: the sidecar was removed: ${order}`);
   }
   assert.equal(result.outcome, 'not-started');
 }

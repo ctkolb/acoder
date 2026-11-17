@@ -184,7 +184,7 @@ t('image check: a daemon that does not answer is refused before the image is ins
 });
 
 // A6.7 (F-38-03): a fake daemon behind the process seam. state: {containers, volumes, networks} (sets of names), down (every call fails),
-// rmFails (every removal fails), listFails (every listing fails). It answers rm, volume rm, network rm, the label-filtered listings
+// rmFails (every removal fails), listFails (every listing fails), listGarbage (every listing succeeds with a line that is not a name). It answers rm, volume rm, network rm, the label-filtered listings
 // (ps --all, volume ls, network ls) and inspect, and records each call's arguments.
 function fakeDaemon(state) {
   const calls = [];
@@ -198,7 +198,7 @@ function fakeDaemon(state) {
     if (state.down) code = 1;
     else if (args[0] === 'rm' || args[1] === 'rm') { const name = args.at(-1); if (!state.rmFails && set?.has(name)) { set.delete(name); code = 0; } }
     else if (args[0] === 'ps' || args[1] === 'ls') {
-      if (!state.listFails && args.includes(`label=${LABEL}`)) { out = [...set].map(name => `${name}\n`).join(''); code = 0; }
+      if (state.listGarbage) { out = 'WARNING: the daemon is busy\n'; code = 0; } else if (!state.listFails && args.includes(`label=${LABEL}`)) { out = [...set].map(name => `${name}\n`).join(''); code = 0; }
     } else if (args[1] === 'inspect') { const name = args.at(-1); if (set?.has(name)) { out = args[0] === 'container' ? '{"Id":"x"}' : '[{"Name":"x"}]'; code = 0; } }
     queueMicrotask(() => { child.stdout.end(out); child.stderr.end(code === 0 ? '' : 'synthetic daemon failure'); child.emit('close', code, null); });
     return child;
@@ -212,6 +212,7 @@ const ALL = [...RESOURCES.containers, RESOURCES.volume, RESOURCES.network];
 t('A6.7 cleanup: a removal that succeeds leaves nothing in the leftovers', async () => {
   const daemon = daemonWith({});
   assert.deepEqual(await mustAsync(() => daemon.runtime.remove(RESOURCES)), []);
+  assert.deepEqual(await mustAsync(() => daemonWith({ listFails: true }).runtime.remove(RESOURCES)), [], 'a successful removal needs no listing');
 });
 
 t('A6.7 cleanup: after a failed removal a successful label-scoped listing without the name confirms it gone', async () => {
@@ -229,6 +230,8 @@ t('A6.7 cleanup: after a failed removal a listing that still shows the name keep
 
 t('A6.7 cleanup: when the removal and the verifying listing both fail, every name is kept as unconfirmed', async () => {
   assert.deepEqual(await mustAsync(() => daemonWith({ down: true }).runtime.remove(RESOURCES)), ALL, 'the daemon does not answer');
+  assert.deepEqual(await mustAsync(() => daemonWith({ rmFails: true, listGarbage: true, containers: new Set(), volumes: new Set(), networks: new Set() }).runtime.remove(RESOURCES)), ALL,
+    'a listing that is not a list of names confirms nothing');
   assert.deepEqual(await mustAsync(() => daemonWith({ rmFails: true, listFails: true, containers: new Set(), volumes: new Set(), networks: new Set() }).runtime.remove(RESOURCES)), ALL,
     'a failed listing never counts as an empty one, even when the resource is in fact gone');
 });
