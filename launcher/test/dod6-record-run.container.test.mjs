@@ -6,6 +6,7 @@ import { CHECK_IDS } from '../lib/run.mjs';
 import { validateRecord } from '../lib/record.mjs';
 import { docker, IMAGE_ID, SKIP } from './helpers/container-env.mjs';
 import { assertStagingGone, withContainerRun } from './helpers/container-run.mjs';
+import { treeHash } from './helpers/tree-hash.mjs';
 
 // G11: every test has a finite time limit of its own and is registered from this file; skipped with the reason without a runtime or
 // ACODER_TEST_IMAGE (S4-AC17). Each container test asserts on the record and files its own run produced.
@@ -28,10 +29,15 @@ const key = mount => `${mount.container} ${mount.target} ${mount.kind} ${mount.m
 // the sanitized response model; inputs.scratch_git_entries counts the Git entries the agent made. S4-AC19: the runtime block is filled.
 t('dod6-record-run: the record of a real run validates and equals the run\'s inputs and observations, the endpoint\'s counts and the agent\'s own numbers', async () => {
   const observed = [];
+  let staged = null;
   await withContainerRun({
     scenario: 'script', limits: { calls: 7, tokens: 900 },
     steps: [{ do: 'request' }, { do: 'request' }, { do: 'git-dirs' }, { do: 'reports' }, { do: 'exit', code: 0 }],
-    hooks: { beforeRelease: async ({ names }) => { observed.push(...await mountsOf(names.agent, 'agent'), ...await mountsOf(names.egress, 'egress')); } },
+    hooks: {
+      beforeRelease: async ({ names }) => { observed.push(...await mountsOf(names.agent, 'agent'), ...await mountsOf(names.egress, 'egress')); },
+      // F-38-01: the test's own hashes of the trees that were mounted, taken while the staging directory still exists.
+      afterStop: ({ staging }) => { staged = ['agent-payload', 'egress-payload', 'agent-payload/skill'].map(dir => treeHash(path.join(staging, dir))); },
+    },
   }, async ({ record, fx, endpointCount }) => {
     assert.deepEqual(validateRecord(record), [], 'the record validates against schema 2');
     assert.equal(record.exit_reason, 'done', JSON.stringify(record.conditions));
@@ -46,6 +52,12 @@ t('dod6-record-run: the record of a real run validates and equals the run\'s inp
     assert.deepEqual(record.ticket, { path: fx.ticket, sha256: fx.ticketSha });
     assert.deepEqual(record.exports.map(entry => [entry.role, entry.manifest_sha256]), fx.exports.map(entry => [entry.role, entry.manifestSha]));
     assert.deepEqual(record.isolation_checks.map(entry => [entry.id, entry.result]), CHECK_IDS.map(id => [id, 'pass']));
+    // F-38-04 (A8.3): the injected names actually observed, as fixed codes (Docker Desktop: HOME and HOSTNAME in the sidecar, HOSTNAME in
+    // the supervisor; measured).
+    assert.deepEqual(['U1', 'P8'].map(id => record.isolation_checks.find(entry => entry.id === id).detail), ['injected:HOME,HOSTNAME', 'injected:HOSTNAME']);
+    // F-38-01 (A9): the launcher's payload and skill hashes equal the test's own hashes of the staged trees.
+    assert.ok(staged !== null && staged.every(hash => /^[0-9a-f]{64}$/.test(hash) && hash !== '0'.repeat(64)), 'the test hashed the staged trees');
+    assert.deepEqual([record.launcher.agent_payload_sha256, record.launcher.egress_payload_sha256, record.launcher.skill_sha256], staged);
     assert.equal(record.usage.calls_forwarded, endpointCount(), 'calls_forwarded equals the endpoint\'s own count');
     assert.equal(endpointCount(), 2);
     assert.deepEqual(record.usage.tokens, { input: 22, output: 14, reasoning: 0, cached_input: 0, total: 36 }, 'the token totals equal the usage the endpoint answered');

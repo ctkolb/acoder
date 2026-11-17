@@ -31,8 +31,9 @@ export function runLifecycle({ fx, failAt, interrupted = false, date = new Date(
       created[name] = fs.lstatSync(file).ino;
     }
     const log = path.join(writable.stage, `run-${writable.tag}.notstarted-${runId}.log`);
-    fs.writeFileSync(log, 'log\n', { flag: 'wx' });
+    // E2 fails before its log exists (the run computes the log path first and still writes the log after the failure, F-38-02).
     if (at('E2')) throw new Error('E2');
+    fs.writeFileSync(log, 'log\n', { flag: 'wx' });
     for (const name of ['volume', 'network', 'egress', 'agent']) resources.add(name);
     if (at('E3')) throw new Error('E3');
     if (at('G')) throw new Error('G');
@@ -55,6 +56,7 @@ export function runLifecycle({ fx, failAt, interrupted = false, date = new Date(
       else resources.delete(name);
     }
     const notStartedLog = path.join(writable.stage, `run-${writable.tag}.notstarted-${runId}.log`);
+    if (outcome.log === 'notstarted' && !fs.existsSync(notStartedLog)) fs.writeFileSync(notStartedLog, 'log\n', { flag: 'wx' });
     let recordFile = null;
     if (outcome.record !== 'none') {
       const started = outcome.record === 'run';

@@ -333,7 +333,16 @@ t('P8: exactly the planned names (plus the runtime allowance), the planned ids, 
   const text = fields => Object.entries(fields).map(([key, value]) => `${key}:\t${value}`).join('\n');
   const input = { env_names: ['ACODER_RUN_ID', 'PATH'], env_allowance: ['HOME', 'HOSTNAME'], uid: 501, gid: 20 };
   const run = over => probeP8(input, { env: { ACODER_RUN_ID: 'r', PATH: '/bin', HOSTNAME: 'h', ...over.env }, uid: over.uid ?? 501, gid: over.gid ?? 20, status: over.status === undefined ? text(status()) : over.status });
-  assert.deepEqual(await mustAsync(() => run({})), { id: 'P8', result: 'pass', detail: null });
+  // A8.3 (F-38-04): a pass carries the injected names it observed as one fixed code of the event protocol (lower case, sorted).
+  assert.deepEqual(await mustAsync(() => run({})), { id: 'P8', result: 'pass', detail: 'injected_hostname' });
+  assert.deepEqual(await mustAsync(() => run({ env: { HOSTNAME: undefined } })), { id: 'P8', result: 'pass', detail: 'injected_none' });
+  assert.deepEqual(await mustAsync(() => run({ env: { HOME: '/h' } })), { id: 'P8', result: 'pass', detail: 'injected_home_hostname' });
+  const podman = { ...input, env_allowance: ['HOME', 'HOSTNAME', 'TERM', 'container'] };
+  assert.deepEqual(await mustAsync(() => probeP8(podman, { env: { ACODER_RUN_ID: 'r', PATH: '/bin', container: 'podman', TERM: 'xterm', HOSTNAME: 'h', HOME: '/h' }, uid: 501, gid: 20, status: text(status()) })),
+    { id: 'P8', result: 'pass', detail: 'injected_container_home_hostname_term' });
+  const leak = await mustAsync(() => run({ env: { SECRET_MARKER_NAME: 'secret-marker-value' } }));
+  assert.deepEqual(leak, { id: 'P8', result: 'fail', detail: 'env_names' });
+  assert.ok(!JSON.stringify(leak).includes('SECRET_MARKER') && !JSON.stringify(leak).includes('secret-marker-value'), 'an unexpected name is never named');
   const cases = [
     [{ env: { EXTRA_NAME: 'x' } }, 'env_names'], [{ env: { PATH: undefined } }, 'env_names'], [{ uid: 0 }, 'ids'], [{ gid: 0 }, 'ids'],
     [{ status: text(status({ CapEff: '0000000000000400' })) }, 'capabilities'], [{ status: text(status({ NoNewPrivs: '0' })) }, 'no_new_privileges'],

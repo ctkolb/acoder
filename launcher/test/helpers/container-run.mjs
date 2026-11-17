@@ -97,7 +97,9 @@ function labelled(args, id) {
 
 // The runtime seam of a container test: every creating call also carries the test label; inspect answers can be altered (options.alter);
 // a call can be failed without running it (options.failCall(args) true: code 1); and the timeline records, with host times, every
-// control line written to a container's standard input, the receipt of the sidecar's summary event and every runtime call (S4-AC13).
+// control line written to a container's standard input, the receipt of the sidecar's summary event and every runtime call (S4-AC13), and
+// for the gate order (F-38-05) every inspect answer the launcher received, every attached start, the sidecar's ready, upstream, clock and
+// phase events and the supervisor's probes and clock events, in the order they arrived.
 function testRuntimeSeam(options, context) {
   const timeline = context.timeline;
   return real => ({
@@ -108,8 +110,9 @@ function testRuntimeSeam(options, context) {
       return real.call(labelled(args, context.ids.id), extra);
     },
     attach: (name, extra) => {
-      const child = real.attach(name, extra);
       const to = isAgent(name) ? 'agent' : 'sidecar';
+      timeline.push({ t: Date.now(), kind: 'attach', to, name });
+      const child = real.attach(name, extra);
       const write = child.stdin.write.bind(child.stdin);
       child.stdin.write = (chunk, ...rest) => { timeline.push({ t: Date.now(), kind: 'control', to, line: String(chunk).trim() }); return write(chunk, ...rest); };
       let pending = '';
@@ -119,6 +122,8 @@ function testRuntimeSeam(options, context) {
           const line = pending.slice(0, at);
           pending = pending.slice(at + 1);
           if (to === 'sidecar' && /^\{"event":"(summary|limit)"/.test(line)) timeline.push({ t: Date.now(), kind: JSON.parse(line).event, to, line });
+          const gate = to === 'sidecar' ? /^\{"event":"(ready|upstream|clock|phase)"/.exec(line) : /"event":"(probes|clock)"/.exec(line);
+          if (gate !== null) timeline.push({ t: Date.now(), kind: `${to}-${gate[1]}`, to });
         }
       });
       child.on('close', () => timeline.push({ t: Date.now(), kind: 'exit', to }));
@@ -126,6 +131,7 @@ function testRuntimeSeam(options, context) {
     },
     inspect: async (kind, name) => {
       const info = await real.inspect(kind, name);
+      timeline.push({ t: Date.now(), kind: 'inspect', what: kind, name });
       context.inspected = [...(context.inspected ?? []), { kind, name, text: JSON.stringify(info) }];
       return options.alter && info !== null ? options.alter(kind, name, structuredClone(info), context) : info;
     },
@@ -274,9 +280,69 @@ export function assertStopOrder(timeline, { signalRequired = true } = {}) {
   return { stopAt: after[stop].t, summaryAt: after[summary].t, signalAt: firstSignal >= 0 ? after[firstSignal].t : null };
 }
 
+// The gate order of A6.6 E3 as built and accepted by the owner (D-R41 (1), F-38-05), from the timeline of the run: (a) the sidecar starts
+// only after the inspect answers H3 and H4 are decided on (its container, the volume, EXT); (b) the agent container starts only after the
+// answer H1 and H2 are decided on and after the sidecar started (and, in a run whose sidecar answered in time, after its ready event); (c)
+// PHASE is written only after the supervisor's probe results and both clock answers arrived (the fourteen results), and RELEASE only after
+// the sidecar acknowledged the phase. failed: the id of the check an adverse fixture fails (null for a healthy run): with H3 or H4 nothing
+// starts; with H1 or H2 the agent container never starts and the sidecar is stopped (its attached start ends) and removed; with any failed
+// check neither PHASE nor RELEASE is written.
+export function assertGateSequence({ timeline, result }, failed = null) {
+  const at = predicate => timeline.findIndex(predicate);
+  const inspected = (what, match) => at(entry => entry.kind === 'inspect' && entry.what === what && match(entry.name));
+  const start = to => at(entry => entry.kind === 'attach' && entry.to === to);
+  const control = (to, prefix) => at(entry => entry.kind === 'control' && entry.to === to && entry.line.startsWith(prefix));
+  const order = JSON.stringify(timeline.filter(entry => entry.kind !== 'call' || ['create', 'start', 'rm', 'kill', 'stop'].includes(entry.args[0])).map(entry => `${entry.kind}:${entry.to ?? entry.what ?? entry.args?.[0] ?? ''}`));
+  const sidecarStart = start('sidecar');
+  const agentStart = start('agent');
+  const h3h4 = [inspected('container', isSidecar), inspected('volume', () => true), inspected('network', () => true)];
+  if (sidecarStart >= 0) assert.ok(h3h4.every(index => index >= 0 && index < sidecarStart), `(a) H3 and H4 were decided before the sidecar started: ${order}`);
+  if (agentStart >= 0) {
+    const h1h2 = inspected('container', isAgent);
+    assert.ok(h1h2 >= 0 && h1h2 < agentStart, `(b) H1 and H2 were decided before the agent container started: ${order}`);
+    assert.ok(sidecarStart >= 0 && sidecarStart < agentStart, `(b) the sidecar started before the agent container: ${order}`);
+    if (!['U1', 'U2'].includes(failed)) {
+      const ready = at(entry => entry.kind === 'sidecar-ready');
+      assert.ok(ready >= 0 && ready < agentStart, `(b) the sidecar was ready before the agent container started: ${order}`);
+    }
+  }
+  const phase = control('sidecar', 'PHASE ');
+  const release = control('agent', 'RELEASE ');
+  if (phase >= 0) {
+    for (const kind of ['agent-probes', 'sidecar-clock', 'agent-clock']) {
+      const index = at(entry => entry.kind === kind);
+      assert.ok(index >= 0 && index < phase, `(c) ${kind} arrived before PHASE: ${order}`);
+    }
+  }
+  if (release >= 0) {
+    const ack = at(entry => entry.kind === 'sidecar-phase');
+    assert.ok(phase >= 0 && ack > phase && ack < release, `(c) the sidecar acknowledged PHASE before RELEASE: ${order}`);
+  }
+  if (failed === null) {
+    assert.ok(sidecarStart >= 0 && agentStart >= 0 && phase >= 0 && release >= 0, `a healthy run starts both containers, writes PHASE and RELEASE: ${order}`);
+    return;
+  }
+  assert.equal(phase, -1, `no PHASE after a failed check: ${order}`);
+  assert.equal(release, -1, `no RELEASE after a failed check: ${order}`);
+  if (failed === 'H3' || failed === 'H4') {
+    assert.equal(sidecarStart, -1, `${failed} failed: the sidecar never started: ${order}`);
+    assert.equal(agentStart, -1, `${failed} failed: the agent container never started: ${order}`);
+    assert.equal(at(entry => entry.kind === 'call' && entry.args[0] === 'create' && entry.args.some(isAgentArg)), -1, `${failed} failed: the agent container was never created: ${order}`);
+  }
+  if (failed === 'H1' || failed === 'H2') {
+    assert.equal(agentStart, -1, `${failed} failed: the agent container never started: ${order}`);
+    assert.ok(sidecarStart >= 0, `${failed} is decided after the sidecar started (E3 as built): ${order}`);
+    assert.ok(at(entry => entry.kind === 'exit' && entry.to === 'sidecar') > sidecarStart, `${failed} failed: the sidecar's attached start ended: ${order}`);
+    assert.ok(at(entry => entry.kind === 'call' && entry.args[0] === 'rm' && isSidecar(String(entry.args.at(-1)))) > sidecarStart, `${failed} failed: the sidecar was removed: ${order}`);
+  }
+  assert.equal(result.outcome, 'not-started');
+}
+const isAgentArg = item => typeof item === 'string' && item.startsWith('acoder-agent-');
+
 // The not-started outcome of an adverse fixture (S4-AC5): that check fails in the record, agent_started false, no started file, no agent
-// marker in scratch, a not-started record, and no runtime resource of the run.
-export function assertNotStarted({ result, record, fx, marker, runLeft, check }, id, detail = undefined) {
+// marker in scratch, a not-started record, no runtime resource of the run, and the gate order of assertGateSequence.
+export function assertNotStarted({ result, record, fx, marker, runLeft, check, timeline }, id, detail = undefined) {
+  assertGateSequence({ timeline, result }, id);
   assert.equal(result.outcome, 'not-started', `the attempt is not started (${result.state} ${result.detail})`);
   assert.equal(result.exit_code, 1);
   assert.ok(record !== null, 'a not-started record was written');

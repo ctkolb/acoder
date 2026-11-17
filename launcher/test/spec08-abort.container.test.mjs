@@ -23,9 +23,16 @@ t('spec08-abort: a pre-usage client abort with admissions open and a token limit
     assert.equal(answers.length, 1, 'the next request ended');
     assert.ok(answers[0].status === 429 || (answers[0].status === null && answers[0].error !== null), `the next request was refused or reset by the stop: ${JSON.stringify(answers[0])}`);
     if (answers[0].status === 429) assert.equal(record.egress_totals.refused_by_reason.acoder_usage_unreported, 1);
+    // TG-38-03: the order of the sidecar's event lines, not timestamps (two events in one millisecond cannot be told apart). The egress
+    // log keeps the request events in the order of the sidecar's stream; each is printed when its request ends. The first forwarded entry
+    // to end is the aborted stream, whose end latched usage_unreported; a forwarded entry printed after it was either in flight at the
+    // latch (counted by the sidecar's in_flight_at_limit) or admitted after it, which must not happen.
     const forwarded = record.egress_log.filter(entry => entry.phase === 'agent' && entry.decision === 'forwarded');
-    const latch = Date.parse(forwarded[0].closed);
-    assert.ok(forwarded.slice(1).every(entry => Date.parse(entry.opened) <= latch), `nothing was admitted after the latch: ${JSON.stringify(forwarded)}`);
+    assert.ok(forwarded.length >= 1 && forwarded[0].complete === false, `the aborted stream ended first: ${JSON.stringify(forwarded)}`);
+    const lineOf = entry => record.egress_log.indexOf(entry);
+    const afterLatch = forwarded.filter(entry => lineOf(entry) > lineOf(forwarded[0]));
+    assert.equal(typeof record.usage.in_flight_at_limit, 'number', 'the sidecar reported what was in flight at the latch');
+    assert.ok(afterLatch.length <= record.usage.in_flight_at_limit, `nothing was admitted after the latch: ${JSON.stringify({ forwarded, in_flight_at_limit: record.usage.in_flight_at_limit })}`);
     assert.ok(forwarded.every(entry => entry.status === null || entry.complete === false), 'no forwarded request completed');
     assert.ok(endpointCount() <= forwarded.length, 'only admitted requests reached the endpoint');
     assertStagingGone({ fx, record });

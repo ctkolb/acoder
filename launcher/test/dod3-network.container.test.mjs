@@ -32,7 +32,7 @@ t('dod3-network: from the agent container only the sidecar path works; the forbi
         { label: 'model', op: 'http' },
       ] }, { do: 'exit', code: 0 }];
     },
-  }, async ({ record, fx, network, forbiddenAddress, forbiddenCount, endpointCount, ids }) => {
+  }, async ({ record, fx, network, forbiddenAddress, forbiddenCount, endpointCount, ids, gateway }) => {
     assert.ok(record !== null && record.agent_started === true, 'the agent ran');
     const results = probeResults(record, nonce);
     const unresolved = label => assert.ok(results[label].ok === false && NAME_FAILURES.includes(results[label].code), `${label} fails at name resolution: ${results[label].code}`);
@@ -40,6 +40,9 @@ t('dod3-network: from the agent container only the sidecar path works; the forbi
     assert.equal(results['forbidden:raw'].ok, false, `the forbidden server's raw address fails (${results['forbidden:raw'].code})`);
     assert.ok(['ENETUNREACH', 'EHOSTUNREACH', 'TIMEOUT'].includes(results['forbidden:raw'].code), results['forbidden:raw'].code);
     for (const label of ['resolve:example', 'resolve:forbidden']) unresolved(label);
+    const dnsLabels = ['127.0.0.1', '::1', '127.0.0.11', gateway].map(server => `dns:${server}`);
+    assert.deepEqual(Object.keys(results).filter(name => name.startsWith('dns:')).sort(), [...dnsLabels].sort(), 'exactly the four DNS probes answered');
+    assert.equal(Object.keys(results).filter(name => name.startsWith('dns:')).length, 4);
     for (const label of Object.keys(results).filter(name => name.startsWith('dns:'))) assert.deepEqual([results[label].ok, results[label].answered ?? false], [false, false], `${label} gets no answer`);
     assert.deepEqual(results['resolve:allowed'].addresses, ['127.0.0.1'], 'the allowed name resolves to 127.0.0.1 only');
     assert.deepEqual([results.model.ok, results.model.status], [true, 200], 'a model request through the sidecar succeeds');

@@ -35,6 +35,11 @@ t('spec07-env: the sidecar and the supervisor have exactly the planned names plu
     }
     const planned = ['ACODER_CONTAINER', 'ACODER_EVENT_PREFIX', 'ACODER_PROBE_INPUT', 'ACODER_RUN_ID', 'ACODER_TAG', 'ACODER_TICKET_SHA256', 'HOME', 'STUB_API_KEY', 'STUB_BASE_URL', 'TMPDIR', ...record.image.env_names];
     assert.deepEqual([...probe.names].sort(), [...planned, 'HOSTNAME'].sort(), 'the supervisor has the planned names plus the injected HOSTNAME only (measured)');
+    // F-38-04 (A8.3): the record carries the observed injected names as fixed codes in isolation_checks.detail of U1 and P8.
+    const detail = id => record.isolation_checks.find(entry => entry.id === id)?.detail;
+    assert.equal(detail('U1'), `injected:${injected.join(',')}`, 'U1 records the names the sidecar showed besides the plan');
+    assert.equal(detail('U1'), 'injected:HOME,HOSTNAME');
+    assert.equal(detail('P8'), 'injected:HOSTNAME', 'P8 records the name the supervisor showed besides the plan');
   });
 });
 

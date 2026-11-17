@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import nodeTest from 'node:test';
 import { checkImageAndRuntime } from '../lib/prepare.mjs';
 import { Refusal } from '../lib/refusal.mjs';
@@ -179,4 +181,54 @@ t('image check: a daemon that does not answer is refused before the image is ins
     assert.equal(await refusalOf(checkImageAndRuntime(options(), runtimeOf(fake, 'docker', { FAKE_MODE: 'down' }))), 'the docker daemon does not answer');
     assert.deepEqual(fake.calls().map(call => call.argv[0]), ['version']);
   });
+});
+
+// A6.7 (F-38-03): a fake daemon behind the process seam. state: {containers, volumes, networks} (sets of names), down (every call fails),
+// rmFails (every removal fails), listFails (every listing fails). It answers rm, volume rm, network rm, the label-filtered listings
+// (ps --all, volume ls, network ls) and inspect, and records each call's arguments.
+function fakeDaemon(state) {
+  const calls = [];
+  const kinds = { rm: 'containers', ps: 'containers', container: 'containers', volume: 'volumes', network: 'networks' };
+  const spawn = (unusedBin, args) => {
+    calls.push(args);
+    const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+    const set = state[kinds[args[0]]];
+    let code = 1;
+    let out = '';
+    if (state.down) code = 1;
+    else if (args[0] === 'rm' || args[1] === 'rm') { const name = args.at(-1); if (!state.rmFails && set?.has(name)) { set.delete(name); code = 0; } }
+    else if (args[0] === 'ps' || args[1] === 'ls') {
+      if (!state.listFails && args.includes(`label=${LABEL}`)) { out = [...set].map(name => `${name}\n`).join(''); code = 0; }
+    } else if (args[1] === 'inspect') { const name = args.at(-1); if (set?.has(name)) { out = args[0] === 'container' ? '{"Id":"x"}' : '[{"Name":"x"}]'; code = 0; } }
+    queueMicrotask(() => { child.stdout.end(out); child.stderr.end(code === 0 ? '' : 'synthetic daemon failure'); child.emit('close', code, null); });
+    return child;
+  };
+  return { calls, runtime: createRuntime({ name: 'docker', bin: '/unused', env: {}, runId: RUN, deps: { spawn } }) };
+}
+const RESOURCES = { containers: ['acoder-agent-r', 'acoder-sidecar-r'], volume: 'acoder-egress-r', network: 'acoder-ext-r' };
+const daemonWith = over => fakeDaemon({ containers: new Set(RESOURCES.containers), volumes: new Set([RESOURCES.volume]), networks: new Set([RESOURCES.network]), ...over });
+const ALL = [...RESOURCES.containers, RESOURCES.volume, RESOURCES.network];
+
+t('A6.7 cleanup: a removal that succeeds leaves nothing in the leftovers', async () => {
+  const daemon = daemonWith({});
+  assert.deepEqual(await mustAsync(() => daemon.runtime.remove(RESOURCES)), []);
+});
+
+t('A6.7 cleanup: after a failed removal a successful label-scoped listing without the name confirms it gone', async () => {
+  const daemon = daemonWith({ rmFails: true, containers: new Set(), volumes: new Set(), networks: new Set() });
+  assert.deepEqual(await mustAsync(() => daemon.runtime.remove(RESOURCES)), []);
+  const listings = daemon.calls.filter(args => args[0] === 'ps' || args[1] === 'ls');
+  assert.ok(listings.length >= 3, 'the containers, the volume and the network were each listed');
+  assert.ok(listings.every(args => args.includes('--filter') && args.includes(`label=${LABEL}`)), 'every listing is scoped to the run label');
+});
+
+t('A6.7 cleanup: after a failed removal a listing that still shows the name keeps it in the leftovers', async () => {
+  const daemon = daemonWith({ rmFails: true });
+  assert.deepEqual(await mustAsync(() => daemon.runtime.remove(RESOURCES)), ALL);
+});
+
+t('A6.7 cleanup: when the removal and the verifying listing both fail, every name is kept as unconfirmed', async () => {
+  assert.deepEqual(await mustAsync(() => daemonWith({ down: true }).runtime.remove(RESOURCES)), ALL, 'the daemon does not answer');
+  assert.deepEqual(await mustAsync(() => daemonWith({ rmFails: true, listFails: true, containers: new Set(), volumes: new Set(), networks: new Set() }).runtime.remove(RESOURCES)), ALL,
+    'a failed listing never counts as an empty one, even when the resource is in fact gone');
 });

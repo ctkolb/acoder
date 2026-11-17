@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import nodeTest from 'node:test';
 import { SKIP } from './helpers/container-env.mjs';
@@ -20,7 +21,8 @@ function assertIncomplete({ record, result, fx }) {
 }
 
 // S4-AC14 (R5-04) r5-readback on real containers: an unreadable directory, an oversize JSON report and a 200001-entry tree each end
-// secret_scan_incomplete with the exact outcome; a FIFO is counted and never opened (A8.6: special entries do not make the scan incomplete).
+// secret_scan_incomplete with the exact outcome; a FIFO or a socket is counted and never opened (A8.6: special entries do not make the scan
+// incomplete). Owner decision D-R41 (2): A8.6 wins; the word FIFO under secret_scan_incomplete in S4-AC14 is superseded.
 t('r5-readback: an unreadable directory the agent left in scratch ends error secret_scan_incomplete', async () => {
   await withContainerRun({ scenario: 'script', steps: [{ do: 'mkdir', name: 'closed', mode: '000' }, ...WORK, { do: 'exit', code: 0 }] }, assertIncomplete);
 });
@@ -60,4 +62,31 @@ t('r5-readback: a FIFO in scratch is counted as a special entry and never opened
     assert.equal(record.secret_scan.special_entries, 1);
     assertStagingGone({ fx, record });
   });
+});
+
+// D-R41 (2), F-38-06: a Unix socket in scratch is a special entry like the FIFO (made on the host after the stop, before the scan; bound by
+// a path relative to scratch, so the address length does not depend on the fixture path).
+t('r5-readback: a Unix socket in scratch is counted as a special entry and never opened; the scan completes and the run ends done', async () => {
+  const server = net.createServer(socket => socket.destroy());
+  let connections = 0;
+  server.on('connection', () => { connections += 1; });
+  try {
+    await withContainerRun({
+      scenario: 'script', steps: [...WORK, { do: 'exit', code: 0 }],
+      hooks: {
+        afterStop: async (info, { fx }) => {
+          const back = process.cwd();
+          process.chdir(fx.writable.scratch);
+          try { await new Promise((resolve, reject) => { server.once('error', reject); server.listen('sock', resolve); }); } finally { process.chdir(back); }
+          assert.ok(fs.lstatSync(path.join(fx.writable.scratch, 'sock')).isSocket(), 'a socket is in scratch');
+        },
+      },
+    }, async ({ record, fx }) => {
+      assert.equal(record.exit_reason, 'done', JSON.stringify(record.conditions));
+      assert.equal(record.secret_scan.status, 'clean');
+      assert.equal(record.secret_scan.special_entries, 1);
+      assert.equal(connections, 0, 'the scan never connected to the socket');
+      assertStagingGone({ fx, record });
+    });
+  } finally { await new Promise(resolve => server.close(() => resolve())); }
 });

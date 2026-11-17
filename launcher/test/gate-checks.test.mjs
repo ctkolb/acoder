@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import nodeTest from 'node:test';
 import { adapters } from '../adapters/index.mjs';
-import { checkH1, checkH2, checkH3, checkH4, checkU1, checkU2, corroborate, planFor } from '../lib/run.mjs';
+import { checkH1, checkH2, checkH3, checkH4, checkU1, checkU2, corroborate, inspectedMounts, planFor } from '../lib/run.mjs';
 import { providers } from '../providers/index.mjs';
 import * as stub from './helpers/stub-adapter.mjs';
 
@@ -112,13 +112,15 @@ t('gate checks: H4 passes the planned volume and EXT; fails other options, a mis
 
 // U1 with D-R32 and the clock bracket of A3.6 (the boundaries of dod5-release-deadline's unit part are in part 2; these pin the gate).
 const READY = { event: 'ready', config_sha256: 'c'.repeat(64), env_names: ['ACODER_RUN_ID', 'ACODER_UPSTREAM_KEY', 'HOSTNAME', 'PATH'], clock_epoch_ms: 1 };
+// A8.3 (F-38-04): a passing U1 records the injected names it observed; READY carries HOSTNAME besides the planned names.
+const U1_PASS = 'injected:HOSTNAME';
 const u1 = (over = {}) => checkU1(
   { ready: READY, readyCount: 1, firstLocal: { phase: 'probe' }, clocks: [{ start: 100000, end: 100500, sample: 100200 }, { start: 101000, end: 101100, sample: 101050 }], ...over },
   { configSha256: 'c'.repeat(64), envNames: ['ACODER_RUN_ID', 'ACODER_UPSTREAM_KEY', 'PATH'], allowance: ['HOME', 'HOSTNAME', 'TERM'] },
 );
 
 t('gate checks: U1 passes the expected hash, names, phase and clock samples; each difference fails', () => {
-  assert.deepEqual(u1(), { result: 'pass', detail: null });
+  assert.deepEqual(u1(), { result: 'pass', detail: U1_PASS });
   assert.deepEqual(u1({ ready: { ...READY, config_sha256: 'f'.repeat(64) } }), { result: 'fail', detail: 'config_hash' });
   assert.deepEqual(u1({ ready: { ...READY, env_names: [...READY.env_names, 'SSH_AUTH_SOCK'] } }), { result: 'fail', detail: 'env_names' });
   assert.deepEqual(u1({ ready: { ...READY, env_names: ['ACODER_RUN_ID', 'PATH'] } }), { result: 'fail', detail: 'env_names' });
@@ -131,13 +133,13 @@ t('gate checks: U1 passes the expected hash, names, phase and clock samples; eac
 
 t('gate checks: U1 accepts a sample within the bracket widened by 1000 ms (inclusive) and a bracket of at most 10000 ms; it refuses 1001 ms outside and 10001 ms', () => {
   const clock = (start, end, sample) => u1({ clocks: [{ start, end, sample }, { start, end, sample: start }] }).detail;
-  assert.equal(clock(10000, 11000, 10000 - 999), null);
-  assert.equal(clock(10000, 11000, 10000 - 1000), null);
+  assert.equal(clock(10000, 11000, 10000 - 999), U1_PASS);
+  assert.equal(clock(10000, 11000, 10000 - 1000), U1_PASS);
   assert.equal(clock(10000, 11000, 10000 - 1001), 'clock_skew');
-  assert.equal(clock(10000, 11000, 11000 + 999), null);
-  assert.equal(clock(10000, 11000, 11000 + 1000), null);
+  assert.equal(clock(10000, 11000, 11000 + 999), U1_PASS);
+  assert.equal(clock(10000, 11000, 11000 + 1000), U1_PASS);
   assert.equal(clock(10000, 11000, 11000 + 1001), 'clock_skew');
-  assert.equal(clock(10000, 20000, 15000), null);
+  assert.equal(clock(10000, 20000, 15000), U1_PASS);
   assert.equal(clock(10000, 20001, 15000), 'clock_skew');
   assert.equal(clock(10000, 9999, 10000), 'clock_skew', 'a reversed bracket');
   assert.equal(clock(10000, 11000, 10000 + 60000), 'clock_skew');
@@ -165,4 +167,72 @@ t('gate checks: P4 and P5 pass only with the four matching sidecar events and no
   assert.deepEqual(status(all.map(entry => ({ ...entry, probe: 'c'.repeat(32) }))), ['fail', 'fail'], 'another probe value');
   assert.deepEqual(status(all.map(entry => ({ ...entry, phase: 'agent' }))), ['fail', 'fail'], 'phase agent');
   assert.deepEqual(corroborate([{ id: 'P4', result: 'fail', detail: 'host_not_refused' }], all, nonce), [{ id: 'P4', result: 'fail', detail: 'host_not_refused' }]);
+});
+
+// TG-38-01: a bracket of length 0 is valid (A3.6); its widened window is 1000 ms on each side, inclusive.
+t('gate checks: U1 accepts a zero-length clock bracket with the sample inside its widened window and refuses 1 ms beyond it', () => {
+  const zero = sample => u1({ clocks: [{ start: 10000, end: 10000, sample }, { start: 10000, end: 10000, sample: 10000 }] }).detail;
+  assert.equal(zero(10000), U1_PASS);
+  assert.equal(zero(9000), U1_PASS);
+  assert.equal(zero(11000), U1_PASS);
+  assert.equal(zero(8999), 'clock_skew');
+  assert.equal(zero(11001), 'clock_skew');
+});
+
+// F-38-04 (A8.3): the injected names actually observed are recorded as one fixed code: the sorted allowance names seen besides the plan.
+t('gate checks: a passing U1 records the injected names it saw as injected:<sorted names>, or injected:none; an unexpected name fails without naming it', () => {
+  const withNames = names => u1({ ready: { ...READY, env_names: names } });
+  const planned = ['ACODER_RUN_ID', 'ACODER_UPSTREAM_KEY', 'PATH'];
+  assert.deepEqual(withNames(planned), { result: 'pass', detail: 'injected:none' });
+  assert.deepEqual(withNames([...planned, 'HOSTNAME', 'HOME']), { result: 'pass', detail: 'injected:HOME,HOSTNAME' });
+  assert.deepEqual(withNames(['TERM', ...planned, 'HOME', 'HOSTNAME']), { result: 'pass', detail: 'injected:HOME,HOSTNAME,TERM' });
+  const unexpected = withNames([...planned, 'HOSTNAME', 'SECRET_MARKER_NAME']);
+  assert.deepEqual(unexpected, { result: 'fail', detail: 'env_names' });
+  assert.ok(!JSON.stringify(unexpected).includes('SECRET_MARKER_NAME'));
+});
+
+// F-38-04: P8's wire code (a fixed code of the event protocol) becomes the record's injected:<names> through the runtime's allowance only.
+t('gate checks: P8\'s injected-name code is recorded as injected:<names> of the allowance; any other code is a protocol failure', async () => {
+  const run = await import('../lib/run.mjs');
+  assert.equal(typeof run.p8Record, 'function', 'run.mjs exports p8Record');
+  const allowance = ['HOME', 'HOSTNAME', 'TERM', 'container'];
+  const pass = detail => run.p8Record({ id: 'P8', result: 'pass', detail }, allowance);
+  assert.deepEqual(pass('injected_hostname'), { result: 'pass', detail: 'injected:HOSTNAME' });
+  assert.deepEqual(pass('injected_none'), { result: 'pass', detail: 'injected:none' });
+  assert.deepEqual(pass('injected_container_home_hostname_term'), { result: 'pass', detail: 'injected:HOME,HOSTNAME,TERM,container' });
+  for (const code of [null, 'injected_', 'injected_path', 'injected_hostname_hostname', 'injected_hostname_home', 'injected_none_home', 'something_else']) {
+    assert.deepEqual(pass(code), { result: 'fail', detail: 'protocol' }, String(code));
+  }
+  assert.deepEqual(run.p8Record({ id: 'P8', result: 'pass', detail: 'injected_container' }, ['HOME', 'HOSTNAME', 'TERM']), { result: 'fail', detail: 'protocol' }, 'a name outside this runtime\'s allowance');
+  assert.deepEqual(run.p8Record({ id: 'P8', result: 'fail', detail: 'env_names' }, allowance), { result: 'fail', detail: 'env_names' }, 'a failure is kept as it is');
+});
+
+// F-38-08: the mount readback. Docker Desktop's /host_mnt prefix is removed only from the two single-file binds over /etc/hosts and
+// /etc/resolv.conf; every other source must equal the plan exactly. An unknown mount type, a missing read-write flag and a tmpfs entry
+// without options fail the comparison.
+const hostMnt = target => info => { const mount = info.Mounts.find(entry => entry.Destination === target); mount.Source = `/host_mnt${mount.Source}`; };
+t('gate checks: the /host_mnt prefix is accepted on the /etc/hosts and /etc/resolv.conf binds only', () => {
+  assert.deepEqual(checkH2(broken('agent', info => { hostMnt('/etc/hosts')(info); hostMnt('/etc/resolv.conf')(info); }), PLAN, IDS), { result: 'pass', detail: null });
+  const mounts = inspectedMounts(broken('agent', hostMnt('/etc/hosts')), 'agent', PLAN.mounts);
+  assert.equal(mounts.find(mount => mount.target === '/etc/hosts').source, PLAN.mounts.find(mount => mount.container === 'agent' && mount.target === '/etc/hosts').source);
+  for (const target of ['/acoder', '/m/run', '/m/run/S4/scratch-t', '/m/run/S4/report-t.json']) {
+    assert.deepEqual(checkH2(broken('agent', hostMnt(target)), PLAN, IDS), { result: 'fail', detail: 'mounts' }, target);
+    const seen = inspectedMounts(broken('agent', hostMnt(target)), 'agent', PLAN.mounts).find(mount => mount.target === target);
+    assert.ok(seen.source.startsWith('/host_mnt/'), `the source on ${target} is kept as reported`);
+  }
+  assert.deepEqual(checkH3(broken('egress', hostMnt('/acoder')), PLAN, IDS, NETWORK), { result: 'fail', detail: 'mounts' });
+});
+
+t('gate checks: an unknown mount type, a missing read-write flag and a tmpfs entry without options fail H2 (and H3)', () => {
+  const mount = (info, target) => info.Mounts.find(entry => entry.Destination === target);
+  assert.deepEqual(checkH2(broken('agent', info => { mount(info, '/m/run').Type = 'npipe'; }), PLAN, IDS), { result: 'fail', detail: 'mounts' }, 'an unknown type');
+  assert.deepEqual(checkH3(broken('egress', info => { mount(info, '/acoder').Type = 'cluster'; }), PLAN, IDS, NETWORK), { result: 'fail', detail: 'mounts' }, 'an unknown type (sidecar)');
+  assert.deepEqual(checkH2(broken('agent', info => { delete mount(info, '/m/run').RW; }), PLAN, IDS), { result: 'fail', detail: 'mounts' }, 'a missing flag on a read-only mount');
+  assert.deepEqual(checkH2(broken('agent', info => { delete mount(info, '/m/run/S4/scratch-t').RW; }), PLAN, IDS), { result: 'fail', detail: 'mounts' }, 'a missing flag on a writable mount');
+  assert.deepEqual(checkH2(broken('agent', info => { mount(info, '/m/run').RW = 'false'; }), PLAN, IDS), { result: 'fail', detail: 'mounts' }, 'a flag that is not a boolean');
+  assert.deepEqual(checkH2(broken('agent', info => { info.HostConfig.Tmpfs['/work'] = null; }), PLAN, IDS), { result: 'fail', detail: 'mounts' }, 'tmpfs options missing');
+  assert.deepEqual(checkH2(broken('agent', info => { delete info.HostConfig.Tmpfs['/work']; info.Mounts.push({ Type: 'tmpfs', Destination: '/work', RW: true }); }), PLAN, IDS), { result: 'fail', detail: 'mounts' }, 'a tmpfs mount without options');
+  const record = inspectedMounts(broken('agent', info => { delete mount(info, '/m/run').RW; mount(info, '/acoder').Type = 'npipe'; }), 'agent', PLAN.mounts);
+  assert.equal(record.find(entry => entry.target === '/m/run').mode, 'rw', 'a missing flag is recorded as read-write, never as read-only');
+  assert.equal(record.find(entry => entry.target === '/acoder').kind, 'bind', 'the record keeps its shape for an unknown type');
 });
