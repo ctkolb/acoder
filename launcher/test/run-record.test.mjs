@@ -167,6 +167,7 @@ t('A6.6 E2 (F-40-01): the scratch directory this attempt created is removed when
   assert.equal(run.last[3], 'not-started');
   assert.equal(fs.existsSync(fx.writable.scratch), false, 'the directory this attempt made is removed');
   assert.equal(fs.readFileSync(fx.writable.reportMd, 'utf8'), 'theirs\n');
+  assert.ok(run.record !== null, `a not-started record was written: ${run.stdout} ${run.stderr}`);
   assert.deepEqual(run.record.cleanup, { status: 'complete', leftovers: [] });
 }));
 
@@ -176,6 +177,7 @@ t('A6.6 (F-40-01): the scratch directory this attempt created is removed after a
   assert.equal(run.code, 1, run.stderr);
   assert.ok(seenDir !== null, 'the attempt had created its scratch directory');
   assert.equal(fs.existsSync(fx.writable.scratch), false, 'and removed it');
+  assert.ok(run.record !== null, 'a not-started record was written');
   assert.ok(!run.record.cleanup.leftovers.includes(fx.writable.scratch));
 }));
 
