@@ -51,26 +51,30 @@ export function checkCall(args, runId) {
   }
 }
 
-// A6.7 (R37-03, F-40-02): one removal of a labelled resource and its verification, shared by the run's cleanup and `review cleanup`. A
-// removal that exits 0 is gone. After a failed removal, ONE listing scoped to the resource kind and to `label=acoder.run=<runId>` decides:
-// the name counts as gone only when that listing succeeded, printed only name-shaped lines and lacks the name. A listing that fails
-// (non-zero exit, timeout) or prints anything else leaves the resource unconfirmed. `call` is a runtime wrapper's call; resolves true when
-// the resource may remain (a leftover), false when it is gone. The removal is never retried.
-const RESOURCE_OPS = {
-  container: { remove: ['rm', '--force'], list: ['ps', '--all'], format: '{{.Names}}' },
-  volume: { remove: ['volume', 'rm', '--force'], list: ['volume', 'ls'], format: '{{.Name}}' },
-  network: { remove: ['network', 'rm'], list: ['network', 'ls'], format: '{{.Name}}' },
-};
-const NAME_LINE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
-export async function removeLabelled(call, kind, resource, runId) {
-  const ops = RESOURCE_OPS[kind];
-  if (ops === undefined) throw new TypeError(`unknown resource kind ${kind}`);
-  const removed = await call([...ops.remove, resource]);
-  if (removed.code === 0) return false;
-  const result = await call([...ops.list, '--filter', `label=${RUN_LABEL_KEY}=${runId}`, '--format', ops.format], { timeoutMs: ANSWER_TIMEOUT_MS });
-  const lines = String(result.stdout ?? '').split('\n').map(line => line.trim()).filter(line => line !== '');
-  if (result.code !== 0 || !lines.every(line => NAME_LINE.test(line))) return true;
-  return lines.includes(resource);
+// A6.7 (R37-03, F-40-02): the removal of labelled resources and its verification, shared by the run's cleanup and `review cleanup`.
+// labelledRemover(call, runId) gives remove(kind, name), which resolves true when the resource may remain (a leftover) and false when it is
+// gone. A removal that exits 0 is gone. After a failed removal, ONE listing scoped to the kind and to `label=acoder.run=<runId>` decides:
+// only a SUCCESSFUL listing that prints name-shaped lines only and lacks the name shows it gone; a listing that fails (non-zero exit,
+// timeout) or prints something that is not a list of names leaves the resource unconfirmed. The removal is never retried.
+const LISTINGS = { container: ['ps', '--all', '{{.Names}}'], volume: ['volume', 'ls', '{{.Name}}'], network: ['network', 'ls', '{{.Name}}'] };
+const REMOVALS = { container: name => ['rm', '--force', name], volume: name => ['volume', 'rm', '--force', name], network: name => ['network', 'rm', name] };
+export function labelledRemover(call, runId) {
+  const label = `${RUN_LABEL_KEY}=${runId}`;
+  async function mayRemain(kind, resource) {
+    const [command, sub, format] = LISTINGS[kind];
+    const result = await call([command, sub, '--filter', `label=${label}`, '--format', format], { timeoutMs: ANSWER_TIMEOUT_MS });
+    const lines = result.stdout.split('\n').map(line => line.trim()).filter(line => line !== '');
+    if (result.code !== 0 || !lines.every(line => /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(line))) return true;
+    return lines.includes(resource);
+  }
+  async function removeOne(kind, args, resource) {
+    const result = await call(args);
+    return result.code !== 0 && await mayRemain(kind, resource);
+  }
+  return (kind, resource) => {
+    if (!Object.hasOwn(REMOVALS, kind)) throw new TypeError(`unknown resource kind ${kind}`);
+    return removeOne(kind, REMOVALS[kind](resource), resource);
+  };
 }
 
 // name, bin: from findRuntime; env: the base environment of every call (the host environment without the key variable); runId: the
@@ -140,10 +144,11 @@ export function createRuntime({ name, bin, env, runId, deps = {} }) {
   // A6.7: removes the run's containers, then the volume, then the network (each only when named); resolves the names that remain or whose
   // absence could not be confirmed.
   async function remove({ containers = [], volume = null, network = null }) {
+    const removeLabelled = labelledRemover(call, runId);
     const leftovers = [];
-    for (const container of containers) if (await removeLabelled(call, 'container', container, runId)) leftovers.push(container);
-    if (volume !== null && await removeLabelled(call, 'volume', volume, runId)) leftovers.push(volume);
-    if (network !== null && await removeLabelled(call, 'network', network, runId)) leftovers.push(network);
+    for (const container of containers) if (await removeLabelled('container', container)) leftovers.push(container);
+    if (volume !== null && await removeLabelled('volume', volume)) leftovers.push(volume);
+    if (network !== null && await removeLabelled('network', network)) leftovers.push(network);
     return leftovers;
   }
 

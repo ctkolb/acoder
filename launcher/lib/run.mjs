@@ -9,7 +9,7 @@ import { PLACEHOLDER_KEY, agentEnvNames, buildPlan, containerBaseUrl, endpointPa
 import { checkImageAndRuntime, prepare } from './prepare.mjs';
 import { buildRecord, canonicalHash, launcherSection, makeRunId, preparedSections, recordNames, writeRecord } from './record.mjs';
 import { createRedactor, emptyScan, SCAN_BOUNDS, scanTree } from './redact.mjs';
-import { createRuntime, findRuntime, removeLabelled } from './runtime.mjs';
+import { createRuntime, findRuntime, labelledRemover } from './runtime.mjs';
 import { createDiskController } from './budget.mjs';
 import { Refusal, safe } from './refusal.mjs';
 import { removeStaging } from './snapshot.mjs';
@@ -936,7 +936,7 @@ const CLEANUP_FLAGS = ['--mailbox', '--ticket'];
 const TICKET_FILE = /^ticket-([A-Za-z0-9._-]{1,120})\.md$/;
 const RUN_ID_TEXT = '\\d{8}T\\d{6}Z-[0-9a-f]{6}';
 const STAGING_MARKER = '.acoder-staging';
-// The discovery listings of `review cleanup`: every labelled resource with its run label. Removal and its verification are removeLabelled's.
+// The discovery listings of `review cleanup`: every labelled resource with its run label (removal and verification: labelledRemover).
 const LISTS = [
   ['container', ['ps', '--all', '--filter', 'label=acoder.run', '--format', '{{.Names}}\t{{.Label "acoder.run"}}']],
   ['volume', ['volume', 'ls', '--filter', 'label=acoder.run', '--format', '{{.Name}}\t{{.Label "acoder.run"}}']],
@@ -1017,7 +1017,7 @@ export async function reviewCleanup(argv, env, deps = {}, io = { stdout: process
     const leftovers = [];
     const mine = (await labelledResources(runtime)).filter(entry => runIds.includes(entry.run));
     // F-40-02: each removal verified as on the run path; a name whose absence is not proven stays a leftover and is not claimed removed.
-    for (const entry of mine) ((await removeLabelled(runtime.call, entry.kind, entry.name, entry.run)) ? leftovers : removed).push(entry.name);
+    for (const entry of mine) ((await labelledRemover(runtime.call, entry.run)(entry.kind, entry.name)) ? leftovers : removed).push(entry.name);
     if (started !== null) {
       const outcome = await removeNamedStaging(started.resources.staging);
       if (outcome === 'removed') removed.push(started.resources.staging);
