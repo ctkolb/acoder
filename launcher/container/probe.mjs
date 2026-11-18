@@ -264,6 +264,8 @@ export async function probeP8(input, { env = process.env, uid = process.getuid()
   if (field('Seccomp') !== '2') return fail('P8', 'seccomp');
   // A8.3: the injected names seen besides the plan (all of the allowance, checked above) as one fixed code: injected_<lower-case names,
   // sorted, joined by _> or injected_none; the launcher records it as injected:<names>.
+  // F-40-05: the `_` join is unambiguous only while no allowance name holds an underscore (both allowances are letters and digits only,
+  // pinned by a test of INJECTED_ENV). A future allowance name with an underscore needs a length-delimited code instead of this one.
   const injected = names.filter(name => !planned.has(name)).map(name => name.toLowerCase()).sort();
   return { id: 'P8', result: 'pass', detail: `injected_${injected.length === 0 ? 'none' : injected.join('_')}` };
 }

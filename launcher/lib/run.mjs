@@ -9,7 +9,7 @@ import { PLACEHOLDER_KEY, agentEnvNames, buildPlan, containerBaseUrl, endpointPa
 import { checkImageAndRuntime, prepare } from './prepare.mjs';
 import { buildRecord, canonicalHash, launcherSection, makeRunId, preparedSections, recordNames, writeRecord } from './record.mjs';
 import { createRedactor, emptyScan, SCAN_BOUNDS, scanTree } from './redact.mjs';
-import { createRuntime, findRuntime } from './runtime.mjs';
+import { createRuntime, findRuntime, removeLabelled } from './runtime.mjs';
 import { createDiskController } from './budget.mjs';
 import { Refusal, safe } from './refusal.mjs';
 import { removeStaging } from './snapshot.mjs';
@@ -126,7 +126,7 @@ const MOUNT_KINDS = ['bind', 'volume', 'tmpfs'];
 
 // The mounts of an inspected container in the shape of A9 (kind, source, target, mode), tmpfs options kept for H2. A mount whose type is
 // not one of the three, or whose read-write flag is not a boolean, is marked `unknown` (it fails H2 and H3) and recorded as a read-write
-// bind: a mount is never read as read-only without the runtime saying so.
+// bind whatever its flag says (F-40-04): a mount is read as read-only only when it is of a known type and the runtime says so.
 export function inspectedMounts(info, container, planMounts = []) {
   const out = [];
   for (const mount of Array.isArray(info?.Mounts) ? info.Mounts : []) {
@@ -137,7 +137,7 @@ export function inspectedMounts(info, container, planMounts = []) {
     const prefixed = HOST_MNT_TARGETS.includes(target) && typeof mount.Source === 'string' && mount.Source.startsWith(`${HOST_MNT}/`);
     const source = kind === 'volume' ? (mount.Name ?? null) : prefixed ? mount.Source.slice(HOST_MNT.length) : (mount.Source ?? null);
     out.push({
-      container, target, source, kind, mode: mount.RW === false ? 'ro' : 'rw', persistent: kind === 'bind', role: planned?.role ?? (kind === 'volume' ? 'socket' : 'payload'),
+      container, target, source, kind, mode: known && mount.RW === false ? 'ro' : 'rw', persistent: kind === 'bind', role: planned?.role ?? (kind === 'volume' ? 'socket' : 'payload'),
       options: kind === 'tmpfs' ? null : undefined, unknown: !known,
     });
   }
@@ -252,7 +252,8 @@ export function checkU1({ ready, readyCount, firstLocal, clocks }, { configSha25
 }
 
 // A8.3: P8's pass carries the injected names as a code of the event protocol (fixed lower-case codes only): injected_<names in lower case,
-// sorted, joined by _> or injected_none. The record holds them as injected:<names> of this runtime's allowance; a code that names anything
+// sorted, joined by _> or injected_none. The `_` join is unambiguous only because no allowance name holds an underscore (INJECTED_ENV,
+// pinned by a test; F-40-05); a future name with one needs a length-delimited code, not this one. The record holds them as injected:<names> of this runtime's allowance; a code that names anything
 // else, a name twice or out of order is a protocol failure. A failed P8 is kept as it is.
 export function p8Record(entry, allowance) {
   if (entry.result !== 'pass') return { result: entry.result, detail: entry.detail };
@@ -474,7 +475,7 @@ async function launch({ options, settings, env }, deps, { changed, interrupt }) 
     runId, tag, prepared, checked, plan: null, basePlan: null, checks: Object.fromEntries(CHECK_IDS.map(id => [id, { result: 'not_run', detail: 'not_reached' }])),
     mounts: [], requests: [], sidecarEvents: [], supervisorEvents: [], summary: null, created: { volume: false, network: false, egress: false, agent: false },
     agentStarted: false, released: null, startedFile: false, logRedactions: 0, conditions: new Set(), budgetKinds: [], agentExit: { code: null, signal: null, outcome: null },
-    reportInodes: {}, parser: adapters[settings.agent].createParser(), limited: false, stopping: false, inputsHash: null,
+    reportInodes: {}, scratchIdentity: null, parser: adapters[settings.agent].createParser(), limited: false, stopping: false, inputsHash: null,
   };
   // A6.5: budget_kind is the first limit, by the order in which the launcher learned of it.
   const learn = kind => { if (!ctx.budgetKinds.includes(kind)) ctx.budgetKinds.push(kind); };
@@ -497,6 +498,10 @@ async function launch({ options, settings, env }, deps, { changed, interrupt }) 
     const openLog = () => fs.openSync(ctx.logPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
     try {
       fs.mkdirSync(writable.scratch, { mode: 0o700 });
+      // F-40-01: the device and inode of the directory THIS attempt created; only that directory is ever removed (an EEXIST above leaves
+      // the competing path untouched and this identity null).
+      const made = fs.lstatSync(writable.scratch);
+      ctx.scratchIdentity = { dev: made.dev, ino: made.ino };
       for (const [label, file] of [['md', writable.reportMd], ['json', writable.reportJson]]) {
         fs.writeFileSync(file, '', { flag: 'wx', mode: 0o600 });
         const info = fs.lstatSync(file);
@@ -644,10 +649,15 @@ async function launch({ options, settings, env }, deps, { changed, interrupt }) 
     // R: release instant T five seconds ahead; one absolute deadline; PHASE agent acknowledged, the started file, then RELEASE at T.
     const releaseAt = now() + RELEASE_LEAD_MS;
     const deadline = releaseAt + settings.limits.wall_seconds * 1000;
+    // F-40-03: only the sidecar's answer to THIS command acknowledges it: the first phase event that arrives after the PHASE line was
+    // written, and it must say phase agent (container/proxy.mjs emits exactly that once on the switch). An earlier event, or one in any
+    // other phase, is no acknowledgement.
+    const phaseMark = ctx.sidecarEvents.length;
+    const answers = () => ctx.sidecarEvents.slice(phaseMark).filter(event => event.event === 'phase');
     sidecar.write(`PHASE agent ${deadline}`);
-    const phased = await until(() => side('phase').length > 0, releaseAt - now());
+    const phased = await until(() => answers().length > 0, releaseAt - now());
     halt('R');
-    if (!phased) throw new Boundary('R', 'runtime_failure');
+    if (!phased || answers()[0].phase !== 'agent') throw new Boundary('R', 'runtime_failure');
     try {
       const fd = fs.openSync(writable.startedRecord, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o644);
       try {
@@ -850,13 +860,23 @@ function removeEmptyReports(ctx, writable, onlyOwn) {
   return leftovers;
 }
 
+// A2.3.4, A6.6 (F-40-01): the empty scratch directory is removed only when this attempt created it and the path still holds that same
+// directory (device and inode as read right after the exclusive mkdir). A path this attempt did not create, or one replaced since, is
+// neither removed nor claimed; a directory of this attempt that cannot be removed (not empty) is a leftover.
+function removeOwnScratch(ctx, writable) {
+  if (ctx.scratchIdentity === null) return [];
+  const current = lstatOrNull(writable.scratch);
+  if (current === null || !current.isDirectory() || current.dev !== ctx.scratchIdentity.dev || current.ino !== ctx.scratchIdentity.ino) return [];
+  try { fs.rmdirSync(writable.scratch); return []; } catch { return [writable.scratch]; }
+}
+
 // A not-started attempt (states E2 to R before the started file): containers and resources removed, empty reports and the empty scratch
 // directory removed, the not-started record and log kept (A6.6). Exit code 1, outcome not-started.
 async function finishNotStarted(ctx, boundary, { runtime, names, options, settings, writable, redactor, now, launched, elapsedSeconds, sidecar, supervisor }) {
   await within(Promise.all([sidecar?.exited, supervisor?.exited].filter(Boolean)), 15000);
   const leftovers = await cleanupRun(ctx, runtime, names);
   leftovers.push(...removeEmptyReports(ctx, writable, true));
-  try { if (lstatOrNull(writable.scratch)?.isDirectory()) fs.rmdirSync(writable.scratch); } catch { leftovers.push(writable.scratch); }
+  leftovers.push(...removeOwnScratch(ctx, writable));
   if (ctx.logPath === undefined) {
     return { outcome: 'not-started', exit_code: 1, record: '-', tag: ctx.tag, run_id: ctx.runId, leftovers, state: boundary.state, detail: boundary.detail };
   }
@@ -916,10 +936,11 @@ const CLEANUP_FLAGS = ['--mailbox', '--ticket'];
 const TICKET_FILE = /^ticket-([A-Za-z0-9._-]{1,120})\.md$/;
 const RUN_ID_TEXT = '\\d{8}T\\d{6}Z-[0-9a-f]{6}';
 const STAGING_MARKER = '.acoder-staging';
+// The discovery listings of `review cleanup`: every labelled resource with its run label. Removal and its verification are removeLabelled's.
 const LISTS = [
-  ['container', ['ps', '--all', '--filter', 'label=acoder.run', '--format', '{{.Names}}\t{{.Label "acoder.run"}}'], name => ['rm', '--force', name]],
-  ['volume', ['volume', 'ls', '--filter', 'label=acoder.run', '--format', '{{.Name}}\t{{.Label "acoder.run"}}'], name => ['volume', 'rm', '--force', name]],
-  ['network', ['network', 'ls', '--filter', 'label=acoder.run', '--format', '{{.Name}}\t{{.Label "acoder.run"}}'], name => ['network', 'rm', name]],
+  ['container', ['ps', '--all', '--filter', 'label=acoder.run', '--format', '{{.Names}}\t{{.Label "acoder.run"}}']],
+  ['volume', ['volume', 'ls', '--filter', 'label=acoder.run', '--format', '{{.Name}}\t{{.Label "acoder.run"}}']],
+  ['network', ['network', 'ls', '--filter', 'label=acoder.run', '--format', '{{.Name}}\t{{.Label "acoder.run"}}']],
 ];
 
 function parseCleanup(argv) {
@@ -970,12 +991,12 @@ async function removeNamedStaging(dir) {
 
 async function labelledResources(runtime) {
   const out = [];
-  for (const [kind, args, removal] of LISTS) {
+  for (const [kind, args] of LISTS) {
     const result = await runtime.call(args);
     if (result.code !== 0) throw new Error(`the runtime could not list the labelled ${kind}s`);
     for (const line of result.stdout.split('\n')) {
       const [name, run] = line.trim().split('\t');
-      if (name && run) out.push({ kind, name, run, removal: removal(name) });
+      if (name && run) out.push({ kind, name, run });
     }
   }
   return out;
@@ -995,9 +1016,8 @@ export async function reviewCleanup(argv, env, deps = {}, io = { stdout: process
     const removed = [];
     const leftovers = [];
     const mine = (await labelledResources(runtime)).filter(entry => runIds.includes(entry.run));
-    for (const entry of mine) await runtime.call(entry.removal);
-    const remaining = new Set((await labelledResources(runtime)).map(entry => entry.name));
-    for (const entry of mine) (remaining.has(entry.name) ? leftovers : removed).push(entry.name);
+    // F-40-02: each removal verified as on the run path; a name whose absence is not proven stays a leftover and is not claimed removed.
+    for (const entry of mine) ((await removeLabelled(runtime.call, entry.kind, entry.name, entry.run)) ? leftovers : removed).push(entry.name);
     if (started !== null) {
       const outcome = await removeNamedStaging(started.resources.staging);
       if (outcome === 'removed') removed.push(started.resources.staging);
