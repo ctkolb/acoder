@@ -657,7 +657,8 @@ async function launch({ options, settings, env }, deps, { changed, interrupt }) 
     sidecar.write(`PHASE agent ${deadline}`);
     const phased = await until(() => answers().length > 0, releaseAt - now());
     halt('R');
-    if (!phased || answers()[0].phase !== 'agent') throw new Boundary('R', 'runtime_failure');
+    if (!phased) throw new Boundary('R', 'runtime_failure');
+    if (answers().length > 0 && answers()[0].phase !== 'agent') throw new Boundary('R', 'runtime_failure');
     try {
       const fd = fs.openSync(writable.startedRecord, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o644);
       try {
@@ -860,14 +861,14 @@ function removeEmptyReports(ctx, writable, onlyOwn) {
   return leftovers;
 }
 
-// A2.3.4, A6.6 (F-40-01): the empty scratch directory is removed only when this attempt created it and the path still holds that same
-// directory (device and inode as read right after the exclusive mkdir). A path this attempt did not create, or one replaced since, is
-// neither removed nor claimed; a directory of this attempt that cannot be removed (not empty) is a leftover.
-function removeOwnScratch(ctx, writable) {
-  if (ctx.scratchIdentity === null) return [];
+// A2.3.4, A6.6 (F-40-01): the empty scratch directory is removed only while the path still holds the directory this attempt created
+// (device and inode as read right after its exclusive mkdir); one of this attempt that cannot be removed (not empty) is a leftover. A path
+// this attempt did not create, or one replaced since, is neither removed nor claimed as a leftover.
+function removeOwnScratch(ctx, writable, leftovers) {
+  if (ctx.scratchIdentity === null) return;
   const current = lstatOrNull(writable.scratch);
-  if (current === null || !current.isDirectory() || current.dev !== ctx.scratchIdentity.dev || current.ino !== ctx.scratchIdentity.ino) return [];
-  try { fs.rmdirSync(writable.scratch); return []; } catch { return [writable.scratch]; }
+  if (current === null || !current.isDirectory() || current.dev !== ctx.scratchIdentity.dev || current.ino !== ctx.scratchIdentity.ino) return;
+  try { if (lstatOrNull(writable.scratch)?.isDirectory()) fs.rmdirSync(writable.scratch); } catch { leftovers.push(writable.scratch); }
 }
 
 // A not-started attempt (states E2 to R before the started file): containers and resources removed, empty reports and the empty scratch
@@ -876,7 +877,7 @@ async function finishNotStarted(ctx, boundary, { runtime, names, options, settin
   await within(Promise.all([sidecar?.exited, supervisor?.exited].filter(Boolean)), 15000);
   const leftovers = await cleanupRun(ctx, runtime, names);
   leftovers.push(...removeEmptyReports(ctx, writable, true));
-  leftovers.push(...removeOwnScratch(ctx, writable));
+  removeOwnScratch(ctx, writable, leftovers);
   if (ctx.logPath === undefined) {
     return { outcome: 'not-started', exit_code: 1, record: '-', tag: ctx.tag, run_id: ctx.runId, leftovers, state: boundary.state, detail: boundary.detail };
   }
