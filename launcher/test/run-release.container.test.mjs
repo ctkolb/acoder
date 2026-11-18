@@ -52,3 +52,23 @@ t('gate: a sidecar that withholds its PHASE acknowledgement gets no release: no 
     assertStagingGone({ fx, record });
   });
 });
+
+// F-40-03 (R39-04; A3.6, A6.6 R): only a phase event with phase agent that arrives after PHASE agent was written acknowledges it. The real
+// sidecar, patched to answer the switch with a probe-phase event: no started file, no RELEASE, the agent never runs, a not-started record
+// (runtime_failure at R), nothing left.
+t('gate: a sidecar that answers PHASE agent with a probe-phase event gets no release: no started file, no RELEASE, no agent marker', async () => {
+  await withContainerRun({ scenario: 'marker', sidecar: [["    emit({ event: 'phase', phase });\n", "    emit({ event: 'phase', phase: 'probe' });\n"]] }, async ({ result, record, fx, marker, runLeft, timeline }) => {
+    const phase = timeline.findIndex(entry => entry.kind === 'control' && entry.to === 'sidecar' && entry.line.startsWith('PHASE agent '));
+    assert.ok(phase >= 0, 'all fourteen checks passed and PHASE was written');
+    assert.ok(timeline.findIndex(entry => entry.kind === 'sidecar-phase') > phase, 'the double printed its (wrong) phase event after PHASE');
+    assert.ok(!timeline.some(entry => entry.kind === 'control' && entry.line.startsWith('RELEASE ')), 'no RELEASE was written');
+    assert.deepEqual([result.outcome, result.exit_code, result.state, result.detail], ['not-started', 1, 'R', 'runtime_failure']);
+    assert.ok(record !== null, 'a not-started record was written');
+    assert.deepEqual([record.agent_started, record.exit_reason, record.error_detail], [false, null, 'runtime_failure']);
+    assert.deepEqual(record.isolation_checks.map(entry => [entry.id, entry.result]), CHECK_IDS.map(id => [id, 'pass']), 'the gate itself passed');
+    assert.equal(fs.existsSync(fx.writable.startedRecord), false, 'no started file');
+    assert.equal(fs.existsSync(marker), false, 'the stub agent never ran');
+    assert.deepEqual(runLeft, { containers: [], volumes: [], networks: [] }, 'all resources of the run are gone');
+    assertStagingGone({ fx, record });
+  });
+});

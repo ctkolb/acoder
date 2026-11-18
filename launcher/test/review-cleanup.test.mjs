@@ -11,22 +11,37 @@ const t = (name, fn) => nodeTest(name, { timeout: 60000 }, fn);
 const RUN = '20261116T101500Z-a1b2c3';
 const OTHER = '20261116T090000Z-d4e5f6';
 
-// An in-memory runtime behind the runtime seam: labelled containers, volumes and networks; `ps`, `volume ls` and `network ls` print
-// `<name>\t<run label>` lines; the removals delete (unless the name is in `stuck`); every call is recorded.
-function memoryRuntime(resources, { stuck = [] } = {}) {
+// An in-memory runtime behind the runtime seam: labelled containers, volumes and networks. The discovery listings (`--filter label=acoder.run`)
+// print `<name>\t<run label>` lines; a listing scoped to one run (`--filter label=acoder.run=<run>`) prints that run's names only, as the
+// runtime does with `--format {{.Names}}` / `{{.Name}}`. A removal deletes and exits 0, except: a name in `stuck` stays and its removal exits
+// 1; a name in `failsButGone` is deleted but its removal exits 1. `scoped(kind, args, stdout)` may replace a scoped listing's answer
+// ({code, stdout}). Every call is recorded.
+function memoryRuntime(resources, { stuck = [], failsButGone = [], scoped = null } = {}) {
   const calls = [];
-  const lines = kind => resources.filter(entry => entry.kind === kind).map(entry => `${entry.name}\t${entry.run}`).join('\n');
-  const drop = name => { if (!stuck.includes(name)) { const at = resources.findIndex(entry => entry.name === name); if (at >= 0) resources.splice(at, 1); } };
+  const lines = (kind, args) => {
+    const filter = args[args.indexOf('--filter') + 1];
+    if (filter === 'label=acoder.run') return resources.filter(entry => entry.kind === kind).map(entry => `${entry.name}\t${entry.run}`).join('\n');
+    return resources.filter(entry => entry.kind === kind && filter === `label=acoder.run=${entry.run}`).map(entry => entry.name).join('\n');
+  };
+  const listed = (kind, args) => {
+    const stdout = lines(kind, args);
+    if (scoped !== null && args[args.indexOf('--filter') + 1] !== 'label=acoder.run') return { code: 0, stdout, stderr: '', ...scoped(kind, args, stdout) };
+    return { code: 0, stdout, stderr: '' };
+  };
+  const drop = name => {
+    if (!stuck.includes(name)) { const at = resources.findIndex(entry => entry.name === name); if (at >= 0) resources.splice(at, 1); }
+    return { code: stuck.includes(name) || failsButGone.includes(name) ? 1 : 0, stdout: '', stderr: '' };
+  };
   const fake = {
     name: 'docker',
     answers: async () => ({ name: 'docker', client_version: '29.0.0', server_version: '29.0.1' }),
     call: async args => {
       calls.push(args);
-      if (args[0] === 'ps') return { code: 0, stdout: lines('container'), stderr: '' };
-      if (args[0] === 'volume' && args[1] === 'ls') return { code: 0, stdout: lines('volume'), stderr: '' };
-      if (args[0] === 'network' && args[1] === 'ls') return { code: 0, stdout: lines('network'), stderr: '' };
-      if (args[0] === 'rm') { drop(args.at(-1)); return { code: 0, stdout: '', stderr: '' }; }
-      if (['volume', 'network'].includes(args[0]) && args[1] === 'rm') { drop(args.at(-1)); return { code: 0, stdout: '', stderr: '' }; }
+      if (args[0] === 'ps') return listed('container', args);
+      if (args[0] === 'volume' && args[1] === 'ls') return listed('volume', args);
+      if (args[0] === 'network' && args[1] === 'ls') return listed('network', args);
+      if (args[0] === 'rm') return drop(args.at(-1));
+      if (['volume', 'network'].includes(args[0]) && args[1] === 'rm') return drop(args.at(-1));
       return { code: 1, stdout: '', stderr: 'unexpected call' };
     },
   };
@@ -190,3 +205,67 @@ t('record facts: the egress log keeps at most 10000 entries and says when it was
   const long = egressLogOf(Array.from({ length: 10001 }, (u, i) => entry(i)));
   assert.deepEqual([long.log.length, long.truncated, long.log.at(-1).seq], [10000, true, 9999]);
 });
+
+// F-40-02 (R39-02; A6.7, A6.9): crash cleanup verifies a removal as the run path does. Exit 0 of the removal means gone; after a failed
+// removal ONE listing scoped to the kind and to label=acoder.run=<run> decides: the name counts as gone only when that listing succeeded,
+// printed only name-shaped lines and lacks the name. Otherwise the name is a leftover (exit 1) and is not in crashed.removed.
+const AGENT = `acoder-agent-${RUN}`;
+const scopedCalls = calls => calls.filter(args => args.includes(`label=acoder.run=${RUN}`));
+async function crashCleanup(fx, options) {
+  fs.writeFileSync(path.join(fx.stage, `run-${fx.tag}.notstarted-${RUN}.log`), 'log\n');
+  const runtime = memoryRuntime([{ kind: 'container', name: AGENT, run: RUN }], options);
+  const result = await cleanup(fx, runtime);
+  return { result, runtime, crashed: crashedOf(fx) };
+}
+
+t('review cleanup (F-40-02): a removal that exits 0 is gone without a verification listing', () => withFixture({}, async fx => {
+  const { result, runtime, crashed } = await crashCleanup(fx, {});
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(crashed.removed, [AGENT]);
+  assert.ok(result.stdout.includes(`removed: ${AGENT}\n`));
+  assert.deepEqual(scopedCalls(runtime.calls), [], 'no verification listing after a successful removal');
+}));
+
+t('review cleanup (F-40-02): a failed removal that a scoped listing confirms gone counts as removed', () => withFixture({}, async fx => {
+  const { result, runtime, crashed } = await crashCleanup(fx, { failsButGone: [AGENT] });
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(crashed.removed, [AGENT]);
+  assert.deepEqual(scopedCalls(runtime.calls), [['ps', '--all', '--filter', `label=acoder.run=${RUN}`, '--format', '{{.Names}}']], 'one listing, scoped to the kind and the run label');
+  assert.equal(runtime.calls.filter(args => args[0] === 'rm').length, 1, 'the removal is not retried');
+}));
+
+t('review cleanup (F-40-02): a failed removal that the scoped listing still shows is a leftover', () => withFixture({}, async fx => {
+  const { result, runtime, crashed } = await crashCleanup(fx, { stuck: [AGENT] });
+  assert.equal(result.code, 1);
+  assert.ok(result.stderr.includes(`leftover: ${AGENT}\n`));
+  assert.ok(!result.stdout.includes(`removed: ${AGENT}`));
+  assert.deepEqual(crashed.removed, []);
+  assert.equal(scopedCalls(runtime.calls).length, 1);
+}));
+
+t('review cleanup (F-40-02): a failed removal whose verification listing fails is a leftover, not removed', () => withFixture({}, async fx => {
+  const { result, crashed } = await crashCleanup(fx, { failsButGone: [AGENT], scoped: () => ({ code: 1, stdout: '', stderr: 'daemon gone' }) });
+  assert.equal(result.code, 1);
+  assert.ok(result.stderr.includes(`leftover: ${AGENT}\n`));
+  assert.deepEqual(crashed.removed, []);
+}));
+
+t('review cleanup (F-40-02): a failed removal whose verification listing holds a malformed line is a leftover, not removed', () => withFixture({}, async fx => {
+  const { result, crashed } = await crashCleanup(fx, { failsButGone: [AGENT], scoped: (kind, args, stdout) => ({ stdout: `${stdout}WARNING: incomplete listing\n` }) });
+  assert.equal(result.code, 1);
+  assert.ok(result.stderr.includes(`leftover: ${AGENT}\n`));
+  assert.ok(!result.stdout.includes(`removed: ${AGENT}`));
+  assert.deepEqual(crashed.removed, []);
+}));
+
+t('review cleanup (F-40-02): an unscoped verification would see another run\'s resource; the scoped one decides for this run only', () => withFixture({}, async fx => {
+  fs.writeFileSync(path.join(fx.stage, `run-${fx.tag}.notstarted-${RUN}.log`), 'log\n');
+  const other = { kind: 'container', name: `acoder-agent-${OTHER}`, run: OTHER };
+  const runtime = memoryRuntime([{ kind: 'container', name: AGENT, run: RUN }, other], { failsButGone: [AGENT] });
+  const result = await cleanup(fx, runtime);
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(crashedOf(fx).removed, [AGENT]);
+  assert.deepEqual(runtime.resources, [other], 'the other run is untouched');
+  assert.ok(runtime.calls.filter(args => args[0] === 'ps').every(args => args.includes('label=acoder.run') || args.includes(`label=acoder.run=${RUN}`)));
+  assert.equal(scopedCalls(runtime.calls).length, 1);
+}));

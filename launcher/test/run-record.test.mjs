@@ -140,3 +140,54 @@ t('A9 reports: the record facts read no byte of a report over the bound and exac
     assert.deepEqual(reportFacts(fx.writable, fx.tag, { io }).md, { path: fx.writable.reportMd, exists: true, bytes: 100, sha256: null }, 'an unreadable report');
   } finally { fs.chmodSync(fx.writable.reportMd, 0o600); }
 }));
+
+// F-40-01 (R39-01; A2.3.4, A6.6 E2): the launcher removes a scratch directory only when THIS attempt created it, proven by the device and
+// inode it read right after its exclusive mkdir and found again at removal time. A competing directory (created after the validation phase,
+// here in the snapshot hook) makes the exclusive mkdir fail with EEXIST; it survives byte for byte, empty or not, and is not claimed as a
+// leftover of this attempt.
+const dirState = dir => { const info = fs.lstatSync(dir); return { dev: info.dev, ino: info.ino, mode: info.mode, tree: treeHash(dir) }; };
+for (const [label, fill] of [['an empty', () => {}], ['a non-empty', dir => fs.writeFileSync(path.join(dir, 'theirs.txt'), 'competing content\n')]]) {
+  t(`A6.6 E2 (F-40-01): ${label} competing scratch directory survives a failed exclusive mkdir unchanged`, () => withFixture({ noExport: true }, async fx => {
+    let before = null;
+    const run = await launch(fx, { afterSnapshot: () => { fs.mkdirSync(fx.writable.scratch, { mode: 0o755 }); fill(fx.writable.scratch); before = dirState(fx.writable.scratch); } });
+    assert.equal(run.code, 1, run.stderr);
+    assert.equal(run.last[3], 'not-started');
+    assert.ok(fs.existsSync(fx.writable.scratch), 'the competing directory still exists');
+    assert.deepEqual(dirState(fx.writable.scratch), before, 'the competing directory is unchanged (device, inode, mode and content)');
+    assert.ok(run.record !== null, 'a not-started record was written');
+    assert.equal(run.record.error_detail, 'runtime_failure');
+    assert.ok(!run.record.cleanup.leftovers.includes(fx.writable.scratch), 'a directory this attempt did not create is not its leftover');
+    assert.equal(fs.existsSync(fx.writable.reportMd), false, 'no report file was created after the failed mkdir');
+  }));
+}
+
+t('A6.6 E2 (F-40-01): the scratch directory this attempt created is removed when E2 fails later (a competing report file)', () => withFixture({ noExport: true }, async fx => {
+  const run = await launch(fx, { afterSnapshot: () => fs.writeFileSync(fx.writable.reportMd, 'theirs\n', { flag: 'wx' }) });
+  assert.equal(run.code, 1, run.stderr);
+  assert.equal(run.last[3], 'not-started');
+  assert.equal(fs.existsSync(fx.writable.scratch), false, 'the directory this attempt made is removed');
+  assert.equal(fs.readFileSync(fx.writable.reportMd, 'utf8'), 'theirs\n');
+  assert.deepEqual(run.record.cleanup, { status: 'complete', leftovers: [] });
+}));
+
+t('A6.6 (F-40-01): the scratch directory this attempt created is removed after a later failure (the refused volume)', () => withFixture({ noExport: true }, async fx => {
+  let seenDir = null;
+  const run = await launch(fx, { onVolume: () => { seenDir = dirState(fx.writable.scratch); } });
+  assert.equal(run.code, 1, run.stderr);
+  assert.ok(seenDir !== null, 'the attempt had created its scratch directory');
+  assert.equal(fs.existsSync(fx.writable.scratch), false, 'and removed it');
+  assert.ok(!run.record.cleanup.leftovers.includes(fx.writable.scratch));
+}));
+
+t('A6.6 (F-40-01): a scratch path replaced by another directory after this attempt created it is not removed', () => withFixture({ noExport: true }, async fx => {
+  let before = null;
+  const run = await launch(fx, { onVolume: () => {
+    fs.rmdirSync(fx.writable.scratch);
+    fs.mkdirSync(fx.writable.scratch, { mode: 0o700 });
+    before = dirState(fx.writable.scratch);
+  } });
+  assert.equal(run.code, 1, run.stderr);
+  assert.ok(before !== null);
+  assert.ok(fs.existsSync(fx.writable.scratch), 'the replacing directory is kept');
+  assert.deepEqual(dirState(fx.writable.scratch), before, 'and unchanged');
+}));

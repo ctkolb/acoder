@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import nodeTest from 'node:test';
 import { adapters } from '../adapters/index.mjs';
-import { checkH1, checkH2, checkH3, checkH4, checkU1, checkU2, corroborate, inspectedMounts, planFor } from '../lib/run.mjs';
+import { checkH1, checkH2, checkH3, checkH4, checkU1, checkU2, corroborate, INJECTED_ENV, inspectedMounts, planFor } from '../lib/run.mjs';
 import { providers } from '../providers/index.mjs';
 import * as stub from './helpers/stub-adapter.mjs';
 
@@ -235,4 +235,34 @@ t('gate checks: an unknown mount type, a missing read-write flag and a tmpfs ent
   const record = inspectedMounts(broken('agent', info => { delete mount(info, '/m/run').RW; mount(info, '/acoder').Type = 'npipe'; }), 'agent', PLAN.mounts);
   assert.equal(record.find(entry => entry.target === '/m/run').mode, 'rw', 'a missing flag is recorded as read-write, never as read-only');
   assert.equal(record.find(entry => entry.target === '/acoder').kind, 'bind', 'the record keeps its shape for an unknown type');
+});
+
+// F-40-04 (F-38-08): an unknown mount type is always recorded as a read-write bind, whatever its read-write flag says (a false flag on a
+// type the launcher does not know is no evidence of a read-only mount); H2 (agent) and H3 (sidecar) fail on it either way.
+t('gate readback: an unknown mount type is recorded as a read-write bind with RW false and with RW true, and fails H2 and H3', () => {
+  for (const rw of [false, true]) {
+    const agent = broken('agent', info => Object.assign(info.Mounts.find(entry => entry.Destination === '/m/run'), { Type: 'npipe', RW: rw }));
+    assert.deepEqual(checkH2(agent, PLAN, IDS), { result: 'fail', detail: 'mounts' }, `H2 with RW ${rw}`);
+    const agentEntry = inspectedMounts(agent, 'agent', PLAN.mounts).find(entry => entry.target === '/m/run');
+    assert.deepEqual([agentEntry.kind, agentEntry.mode, agentEntry.unknown], ['bind', 'rw', true], `the agent record with RW ${rw}`);
+    const sidecar = broken('egress', info => Object.assign(info.Mounts.find(entry => entry.Destination === '/acoder'), { Type: 'cluster', RW: rw }));
+    assert.deepEqual(checkH3(sidecar, PLAN, IDS, NETWORK), { result: 'fail', detail: 'mounts' }, `H3 with RW ${rw}`);
+    const sidecarEntry = inspectedMounts(sidecar, 'egress', PLAN.mounts).find(entry => entry.target === '/acoder');
+    assert.deepEqual([sidecarEntry.kind, sidecarEntry.mode, sidecarEntry.unknown], ['bind', 'rw', true], `the sidecar record with RW ${rw}`);
+  }
+  // A known type keeps its flag: the planned read-only bind is still recorded as read-only.
+  assert.equal(inspectedMounts(infoFor('agent'), 'agent', PLAN.mounts).find(entry => entry.target === '/m/run').mode, 'ro');
+});
+
+// F-40-05 (R39-03): P8's wire code joins the lower-case names with `_` (N-R49), so a name that held an underscore could not be told from
+// two names. Every name of both allowances must therefore be letters and digits only; a future name with an underscore needs a
+// length-delimited code instead (see the encoder in container/probe.mjs).
+t('gate checks: every injected-name allowance holds letters and digits only, so P8\'s `_`-joined code stays unambiguous', () => {
+  assert.deepEqual(Object.keys(INJECTED_ENV).sort(), ['docker', 'podman']);
+  for (const [runtime, names] of Object.entries(INJECTED_ENV)) {
+    assert.ok(names.length > 0, `${runtime} has an allowance`);
+    for (const name of names) {
+      assert.match(name, /^[A-Za-z][A-Za-z0-9]*$/, `${runtime} allowance name ${name} must not contain "_" or other separators: P8's injected_<names> code joins names with "_", so such a name would be ambiguous; change the wire code to a length-delimited one first`);
+    }
+  }
 });
