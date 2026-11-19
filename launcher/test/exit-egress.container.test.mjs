@@ -28,9 +28,11 @@ t('exit reason egress_sidecar_exited: the sidecar is killed while the agent runs
 
 // S4-AC14 egress_protocol_error: a sidecar double prints an invalid event line after the release; the run ends error with that detail, the
 // sidecar is killed before any signal to the agent container.
+// The bogus line comes 8 s after the phase switch, so after the release (five seconds after PHASE agent): a protocol event before the
+// release refuses it (F-42-02), which is the phase tests' concern, not this one.
 t('exit reason egress_protocol_error: an invalid sidecar event line after the release ends the run; the sidecar is stopped before the agent', async () => {
   await withContainerRun({
-    scenario: 'sleep', wallSeconds: 60, sidecar: [[PHASE_EVENT, `${PHASE_EVENT}\n    setTimeout(() => print({ event: 'bogus' }), 3000);`]],
+    scenario: 'sleep', wallSeconds: 60, sidecar: [[PHASE_EVENT, `${PHASE_EVENT}\n    setTimeout(() => print({ event: 'bogus' }), 8000);`]],
   }, async ({ record, result, fx, timeline, runLeft }) => {
     assert.ok(record !== null && record.agent_started === true, 'the agent ran');
     assert.deepEqual([record.exit_reason, record.error_detail, result.exit_code], ['error', 'egress_protocol_error', 1], JSON.stringify(record.conditions));
