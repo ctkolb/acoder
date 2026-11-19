@@ -124,7 +124,7 @@ async function launchWith(variant) {
             const summary = () => emit({ event: 'summary', forwarded: 0, refused_probe: 3, refused_agent: 0, refused_by_reason: {},
               bytes_up: 0, bytes_down: 0, key_reflections: 0, usage_missing: 0, admitted_after_token_limit: 0, in_flight_at_limit: null, tokens: null });
             if (variant === 'summary-during') later(summary);
-            if (variant === 'summary-exit-during') later(() => { summary(); child.stdout.once('data', close); });
+            if (variant === 'summary-exit-during') later(() => { child.stdout.once('data', close); summary(); });
           }
           if (line.startsWith('RELEASE ')) queueMicrotask(() => {
             emit({ event: 'released' });
