@@ -284,7 +284,9 @@ const UNRELIABLE = {
 for (const [name, discovery] of Object.entries(UNRELIABLE)) {
   for (const withStarted of [true, false]) {
     t(`review cleanup (F-42-01): ${name} makes the discovery unreliable (${withStarted ? 'started file' : 'attempt log'}): exit 1, nothing removed, no crashed record, and a retry works`, () => withFixture({}, async fx => {
+      // Writable inside: these cases are about discovery; the read-only staging removal has its own tests above.
       const dir = staging(fx);
+      fs.chmodSync(path.join(dir, 'mailbox'), 0o755);
       if (withStarted) startedFile(fx, RUN, dir);
       else fs.writeFileSync(path.join(fx.stage, `run-${fx.tag}.notstarted-${RUN}.log`), 'log\n');
       const resources = runResources(RUN);
