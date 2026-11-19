@@ -23,6 +23,7 @@ const t = (name, fn) => nodeTest(name, { timeout: 60000 }, fn);
 //   duplicate        — two phase-agent events at once;
 //   agent-probe      — a phase-agent event and at once a probe-phase event;
 //   exit-after       — a phase-agent event, then the sidecar closes at once;
+//   exit-with-ack    — a phase-agent event; the sidecar closes in the same turn, right after the launcher has read the event;
 //   exit-during      — a phase-agent event; the sidecar closes 100 ms later, during the five-second lead (after the started file);
 //   duplicate-during — a phase-agent event; a second one 100 ms later, during the lead;
 //   invalid-during   — a phase-agent event; an invalid line 100 ms later, during the lead.
@@ -109,6 +110,8 @@ async function launchWith(variant) {
           if (line.startsWith('PHASE ') && variant === 'duplicate') queueMicrotask(() => { emit({ event: 'phase', phase: 'agent' }); emit({ event: 'phase', phase: 'agent' }); });
           if (line.startsWith('PHASE ') && variant === 'agent-probe') queueMicrotask(() => { emit({ event: 'phase', phase: 'agent' }); emit({ event: 'phase', phase: 'probe' }); });
           if (line.startsWith('PHASE ') && variant === 'exit-after') queueMicrotask(() => { emit({ event: 'phase', phase: 'agent' }); close(); });
+          // Registered after the launcher's own reader, so it runs once that reader has taken the line: before the launcher's wait resumes.
+          if (line.startsWith('PHASE ') && variant === 'exit-with-ack') { child.stdout.once('data', close); queueMicrotask(() => emit({ event: 'phase', phase: 'agent' })); }
           if (line.startsWith('PHASE ') && variant.endsWith('-during')) {
             queueMicrotask(() => emit({ event: 'phase', phase: 'agent' }));
             if (variant === 'exit-during') later(close);
@@ -207,6 +210,12 @@ t('A3.6 (F-42-02): a probe-phase event right after the phase-agent answer refuse
 
 t('A3.6 (F-42-02): a sidecar that closes right after its acknowledgement gets no started file and no RELEASE: not-started at R', async () => {
   assertNotReleased(await launchWith('exit-after'));
+});
+
+t('A3.6 (F-42-02): a sidecar that closes as its acknowledgement is read gets no started file and no RELEASE: not-started at R', async () => {
+  const run = await launchWith('exit-with-ack');
+  assertNotReleased(run);
+  assert.match(run.logText, /"event":"phase","phase":"agent"/, 'the acknowledgement itself was read');
 });
 
 // After the started file exists the run counts as started (A6.6): the file stays, RELEASE is never sent, the agent never starts, and the
