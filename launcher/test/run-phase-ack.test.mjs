@@ -26,7 +26,10 @@ const t = (name, fn) => nodeTest(name, { timeout: 60000 }, fn);
 //   exit-with-ack    — a phase-agent event; the sidecar closes in the same turn, right after the launcher has read the event;
 //   exit-during      — a phase-agent event; the sidecar closes 100 ms later, during the five-second lead (after the started file);
 //   duplicate-during — a phase-agent event; a second one 100 ms later, during the lead;
-//   invalid-during   — a phase-agent event; an invalid line 100 ms later, during the lead.
+//   invalid-during   — a phase-agent event; an invalid line 100 ms later, during the lead;
+//   fatal-during     — a phase-agent event; a fatal event 100 ms later, during the lead;
+//   summary-during   — a phase-agent event; a summary 100 ms later (an exit event with the sidecar still attached);
+//   summary-exit-during — a phase-agent event; a summary and the sidecar's close 100 ms later.
 // Only `valid` may write the started file and send RELEASE; all fourteen checks pass in every variant.
 function inspectOf(plan, service, network) {
   const agent = service === 'agent';
@@ -117,6 +120,11 @@ async function launchWith(variant) {
             if (variant === 'exit-during') later(close);
             if (variant === 'duplicate-during') later(() => emit({ event: 'phase', phase: 'agent' }));
             if (variant === 'invalid-during') later(() => child.stdout.write('not an event\n'));
+            if (variant === 'fatal-during') later(() => emit({ event: 'fatal', code: 'internal_error' }));
+            const summary = () => emit({ event: 'summary', forwarded: 0, refused_probe: 3, refused_agent: 0, refused_by_reason: {},
+              bytes_up: 0, bytes_down: 0, key_reflections: 0, usage_missing: 0, admitted_after_token_limit: 0, in_flight_at_limit: null, tokens: null });
+            if (variant === 'summary-during') later(summary);
+            if (variant === 'summary-exit-during') later(() => { summary(); child.stdout.once('data', close); });
           }
           if (line.startsWith('RELEASE ')) queueMicrotask(() => {
             emit({ event: 'released' });
@@ -243,4 +251,20 @@ t('A3.6 (F-42-02): a second phase-agent event during the lead keeps the started 
 
 t('A3.6 (F-42-02): an invalid sidecar line during the lead keeps the started file but sends no RELEASE: error egress_protocol_error', async () => {
   assertStartedNotReleased(await launchWith('invalid-during'), 'egress_protocol_error');
+});
+
+t('A3.6 (F-42-02): a fatal sidecar event during the lead keeps the started file but sends no RELEASE: error egress_protocol_error', async () => {
+  assertStartedNotReleased(await launchWith('fatal-during'), 'egress_protocol_error');
+});
+
+t('A3.6 (F-42-02): a sidecar summary during the lead keeps the started file but sends no RELEASE: error runtime_failure', async () => {
+  const run = await launchWith('summary-during');
+  assertStartedNotReleased(run, 'runtime_failure');
+  assert.equal(run.record.conditions.includes('egress_sidecar_exited'), false, 'the sidecar had not exited');
+});
+
+t('A3.6 (F-42-02): a sidecar that summarizes and then closes during the lead is an expected end, not egress_sidecar_exited (A6.5)', async () => {
+  const run = await launchWith('summary-exit-during');
+  assertStartedNotReleased(run, 'runtime_failure');
+  assert.equal(run.record.conditions.includes('egress_sidecar_exited'), false, JSON.stringify(run.record.conditions));
 });
