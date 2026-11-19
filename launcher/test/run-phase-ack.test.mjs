@@ -18,6 +18,14 @@ const t = (name, fn) => nodeTest(name, { timeout: 60000 }, fn);
 //   wrong    — a phase event with phase probe after the PHASE line;
 //   withheld — nothing;
 //   early    — a phase event with phase agent BEFORE the PHASE line (in answer to CLOCK), nothing after it.
+// F-42-02 (R41-02): after the PHASE line exactly one phase event, phase agent, from a sidecar that is still running and has sent no protocol
+// or exit event, both when the started file is written and when RELEASE is due:
+//   duplicate        — two phase-agent events at once;
+//   agent-probe      — a phase-agent event and at once a probe-phase event;
+//   exit-after       — a phase-agent event, then the sidecar closes at once;
+//   exit-during      — a phase-agent event; the sidecar closes 100 ms later, during the five-second lead (after the started file);
+//   duplicate-during — a phase-agent event; a second one 100 ms later, during the lead;
+//   invalid-during   — a phase-agent event; an invalid line 100 ms later, during the lead.
 // Only `valid` may write the started file and send RELEASE; all fourteen checks pass in every variant.
 function inspectOf(plan, service, network) {
   const agent = service === 'agent';
@@ -97,6 +105,16 @@ async function launchWith(variant) {
           if (line === 'CLOCK') queueMicrotask(() => emit({ event: 'clock', clock_epoch_ms: Date.now() }));
           if (line === 'CLOCK' && !agent && variant === 'early') queueMicrotask(() => emit({ event: 'phase', phase: 'agent' }));
           if (line.startsWith('PHASE ') && ['valid', 'wrong'].includes(variant)) queueMicrotask(() => emit({ event: 'phase', phase: variant === 'valid' ? 'agent' : 'probe' }));
+          const later = action => setTimeout(action, 100);
+          if (line.startsWith('PHASE ') && variant === 'duplicate') queueMicrotask(() => { emit({ event: 'phase', phase: 'agent' }); emit({ event: 'phase', phase: 'agent' }); });
+          if (line.startsWith('PHASE ') && variant === 'agent-probe') queueMicrotask(() => { emit({ event: 'phase', phase: 'agent' }); emit({ event: 'phase', phase: 'probe' }); });
+          if (line.startsWith('PHASE ') && variant === 'exit-after') queueMicrotask(() => { emit({ event: 'phase', phase: 'agent' }); close(); });
+          if (line.startsWith('PHASE ') && variant.endsWith('-during')) {
+            queueMicrotask(() => emit({ event: 'phase', phase: 'agent' }));
+            if (variant === 'exit-during') later(close);
+            if (variant === 'duplicate-during') later(() => emit({ event: 'phase', phase: 'agent' }));
+            if (variant === 'invalid-during') later(() => child.stdout.write('not an event\n'));
+          }
           if (line.startsWith('RELEASE ')) queueMicrotask(() => {
             emit({ event: 'released' });
             emit({ event: 'agent_started', pid: 1 });
@@ -177,4 +195,43 @@ t('A3.6 (F-40-03): a phase-agent event after PHASE agent releases: the started f
   assert.ok(commands.indexOf('PHASE') >= 0 && commands.indexOf('RELEASE') > commands.indexOf('PHASE'), commands.join(' '));
   assert.equal(startedFile, true, 'the started file was written');
   assert.equal(record.agent_started, true, `${result.stdout} ${result.stderr}`);
+});
+
+t('A3.6 (F-42-02): two phase-agent answers to PHASE agent are no acknowledgement: no started file, no RELEASE, not-started at R', async () => {
+  assertNotReleased(await launchWith('duplicate'));
+});
+
+t('A3.6 (F-42-02): a probe-phase event right after the phase-agent answer refuses: no started file, no RELEASE, not-started at R', async () => {
+  assertNotReleased(await launchWith('agent-probe'));
+});
+
+t('A3.6 (F-42-02): a sidecar that closes right after its acknowledgement gets no started file and no RELEASE: not-started at R', async () => {
+  assertNotReleased(await launchWith('exit-after'));
+});
+
+// After the started file exists the run counts as started (A6.6): the file stays, RELEASE is never sent, the agent never starts, and the
+// run ends as an error whose conditions hold runtime_failure (R failed) and the sidecar's own condition, which wins by precedence (A6.5).
+function assertStartedNotReleased(run, detail) {
+  const { result, fields, record, commands, startedFile } = run;
+  assertAllChecksPassed(record);
+  assert.equal(startedFile, true, 'the started file stays: the ticket counts as started');
+  assert.equal(commands.includes('RELEASE'), false, 'no RELEASE to a sidecar that failed');
+  assert.deepEqual([result.code, fields[3]], [1, 'error'], `${result.stdout} ${result.stderr}`);
+  assert.equal(record.agent_started, false);
+  assert.equal(record.exit_reason, 'error');
+  assert.equal(record.error_detail, detail);
+  assert.ok(record.conditions.includes('runtime_failure'), JSON.stringify(record.conditions));
+  assert.deepEqual(record.cleanup, { status: 'complete', leftovers: [] }, 'nothing left behind');
+}
+
+t('A3.6 (F-42-02): a sidecar that closes during the lead keeps the started file but gets no RELEASE: error egress_sidecar_exited', async () => {
+  assertStartedNotReleased(await launchWith('exit-during'), 'egress_sidecar_exited');
+});
+
+t('A3.6 (F-42-02): a second phase-agent event during the lead keeps the started file but sends no RELEASE: error runtime_failure', async () => {
+  assertStartedNotReleased(await launchWith('duplicate-during'), 'runtime_failure');
+});
+
+t('A3.6 (F-42-02): an invalid sidecar line during the lead keeps the started file but sends no RELEASE: error egress_protocol_error', async () => {
+  assertStartedNotReleased(await launchWith('invalid-during'), 'egress_protocol_error');
 });

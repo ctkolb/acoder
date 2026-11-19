@@ -15,8 +15,8 @@ const OTHER = '20261116T090000Z-d4e5f6';
 // print `<name>\t<run label>` lines; a listing scoped to one run (`--filter label=acoder.run=<run>`) prints that run's names only, as the
 // runtime does with `--format {{.Names}}` / `{{.Name}}`. A removal deletes and exits 0, except: a name in `stuck` stays and its removal exits
 // 1; a name in `failsButGone` is deleted but its removal exits 1. `scoped(kind, args, stdout)` may replace a scoped listing's answer
-// ({code, stdout}). Every call is recorded.
-function memoryRuntime(resources, { stuck = [], failsButGone = [], scoped = null } = {}) {
+// ({code, stdout}); `discovery(kind, stdout)` may replace a discovery listing's output. Every call is recorded.
+function memoryRuntime(resources, { stuck = [], failsButGone = [], scoped = null, discovery = null } = {}) {
   const calls = [];
   const lines = (kind, args) => {
     const filter = args[args.indexOf('--filter') + 1];
@@ -26,6 +26,7 @@ function memoryRuntime(resources, { stuck = [], failsButGone = [], scoped = null
   const listed = (kind, args) => {
     const stdout = lines(kind, args);
     if (scoped !== null && args[args.indexOf('--filter') + 1] !== 'label=acoder.run') return { code: 0, stdout, stderr: '', ...scoped(kind, args, stdout) };
+    if (discovery !== null && args[args.indexOf('--filter') + 1] === 'label=acoder.run') return { code: 0, stdout: discovery(kind, stdout), stderr: '' };
     return { code: 0, stdout, stderr: '' };
   };
   const drop = name => {
@@ -268,4 +269,63 @@ t('review cleanup (F-40-02): an unscoped verification would see another run\'s r
   assert.deepEqual(runtime.resources, [other], 'the other run is untouched');
   assert.ok(runtime.calls.filter(args => args[0] === 'ps').every(args => args.includes('label=acoder.run') || args.includes(`label=acoder.run=${RUN}`)));
   assert.equal(scopedCalls(runtime.calls).length, 1);
+}));
+
+// F-42-01 (R41-01; A6.7, A6.9): a discovery listing that succeeds but holds a line the listing format cannot have produced (a warning, a
+// name without its run label, any other text) is unreliable: exit 1 with the count of such lines and not their text, nothing removed, no
+// crashed record, so `review cleanup` can run again once the listing is clean. Each case also proves the retry: a clean second run removes
+// the run's resources and writes the crashed record.
+const UNRELIABLE = {
+  'a WARNING line among valid lines': (kind, stdout) => kind === 'container' ? `WARNING: incomplete listing\n${stdout}` : stdout,
+  'a name without its run label': (kind, stdout) => kind === 'volume' ? `${stdout}\nacoder-egress-${OTHER}` : stdout,
+  'a name with an empty run label': (kind, stdout) => kind === 'network' ? `${stdout}\nacoder-ext-${OTHER}\t` : stdout,
+  'a malformed line only': kind => kind === 'container' ? 'WARNING: incomplete listing\n' : '',
+};
+for (const [name, discovery] of Object.entries(UNRELIABLE)) {
+  for (const withStarted of [true, false]) {
+    t(`review cleanup (F-42-01): ${name} makes the discovery unreliable (${withStarted ? 'started file' : 'attempt log'}): exit 1, nothing removed, no crashed record, and a retry works`, () => withFixture({}, async fx => {
+      const dir = staging(fx);
+      if (withStarted) startedFile(fx, RUN, dir);
+      else fs.writeFileSync(path.join(fx.stage, `run-${fx.tag}.notstarted-${RUN}.log`), 'log\n');
+      const resources = runResources(RUN);
+      const runtime = memoryRuntime(resources, { discovery });
+      const before = listing(fx.base);
+      const result = await cleanup(fx, runtime);
+      assert.equal(result.code, 1, `${result.stdout}${result.stderr}`);
+      assert.match(result.stderr, /^error: the runtime listing of labelled resources is unreliable: 1 unparseable line; nothing was removed[^\n]*\n$/);
+      assert.equal(result.stderr.includes('WARNING') || result.stderr.includes(OTHER), false, 'the line itself is not printed');
+      assert.equal(result.stdout, '', 'nothing is reported removed');
+      assert.deepEqual(runtime.calls.filter(args => args.includes('rm')), [], 'no removal');
+      assert.equal(runtime.resources.length, 4, 'every resource stays');
+      assert.equal(fs.existsSync(dir), true, 'the staging directory stays');
+      assert.equal(fs.existsSync(path.join(fx.stage, `run-${fx.tag}.crashed.json`)), false, 'no crashed record');
+      assert.deepEqual(listing(fx.base), before, 'no file changed');
+      const again = await cleanup(fx, memoryRuntime(resources));
+      assert.equal(again.code, 0, again.stderr);
+      assert.deepEqual(resources, [], 'the retry removes the run\'s resources');
+      assert.deepEqual(crashedOf(fx).removed.slice(0, 4), runResources(RUN).map(entry => entry.name));
+    }));
+  }
+}
+
+t('review cleanup (F-42-01): an unreliable line in a second listing is counted with the first one, and a well-formed foreign label is not', () => withFixture({}, async fx => {
+  fs.writeFileSync(path.join(fx.stage, `run-${fx.tag}.notstarted-${RUN}.log`), 'log\n');
+  const runtime = memoryRuntime([...runResources(RUN), { kind: 'volume', name: 'acoder-test-volume', run: 't0123456789ab' }], {
+    discovery: (kind, stdout) => kind === 'container' ? `${stdout}\nlisting truncated` : kind === 'network' ? `${stdout}\n  \nname\twith\tthree` : stdout,
+  });
+  const result = await cleanup(fx, runtime);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /^error: the runtime listing of labelled resources is unreliable: 2 unparseable lines; nothing was removed/);
+  assert.equal(runtime.resources.length, 5);
+  assert.equal(fs.existsSync(path.join(fx.stage, `run-${fx.tag}.crashed.json`)), false);
+}));
+
+t('review cleanup (F-42-01): a well-formed listing with another label value and blank lines stays reliable; the foreign resource is untouched', () => withFixture({}, async fx => {
+  fs.writeFileSync(path.join(fx.stage, `run-${fx.tag}.notstarted-${RUN}.log`), 'log\n');
+  const foreign = { kind: 'container', name: 'acoder-test-ctr', run: 't0123456789ab' };
+  const runtime = memoryRuntime([...runResources(RUN), foreign], { discovery: (kind, stdout) => `\n${stdout}\n\n` });
+  const result = await cleanup(fx, runtime);
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(runtime.resources, [foreign]);
+  assert.deepEqual(crashedOf(fx).removed, runResources(RUN).map(entry => entry.name));
 }));
