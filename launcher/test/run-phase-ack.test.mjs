@@ -29,7 +29,8 @@ const t = (name, fn) => nodeTest(name, { timeout: 60000 }, fn);
 //   invalid-during   — a phase-agent event; an invalid line 100 ms later, during the lead;
 //   fatal-during     — a phase-agent event; a fatal event 100 ms later, during the lead;
 //   summary-during   — a phase-agent event; a summary 100 ms later (an exit event with the sidecar still attached);
-//   summary-exit-during — a phase-agent event; a summary and the sidecar's close 100 ms later.
+//   summary-exit-during — a phase-agent event; after the started file (the beforeRelease hook) a summary and the sidecar's close, both
+//                         read by the launcher before the hook returns, so the order does not depend on load.
 // Only `valid` may write the started file and send RELEASE; all fourteen checks pass in every variant.
 function inspectOf(plan, service, network) {
   const agent = service === 'agent';
@@ -65,6 +66,7 @@ async function launchWith(variant) {
       const commands = [];
       const sidecarLines = [];
       let plan;
+      let summaryThenClose = null;
       const attach = name => {
         const agent = name.startsWith('acoder-agent-');
         const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
@@ -124,7 +126,7 @@ async function launchWith(variant) {
             const summary = () => emit({ event: 'summary', forwarded: 0, refused_probe: 3, refused_agent: 0, refused_by_reason: {},
               bytes_up: 0, bytes_down: 0, key_reflections: 0, usage_missing: 0, admitted_after_token_limit: 0, in_flight_at_limit: null, tokens: null });
             if (variant === 'summary-during') later(summary);
-            if (variant === 'summary-exit-during') later(() => { child.stdout.once('data', close); summary(); });
+            if (variant === 'summary-exit-during') summaryThenClose = () => { summary(); close(); };
           }
           if (line.startsWith('RELEASE ')) queueMicrotask(() => {
             emit({ event: 'released' });
@@ -144,6 +146,7 @@ async function launchWith(variant) {
         env: launcher.env(fx.env), deps: {
           launchEnabled: true,
           planTransform: value => { plan = value; return value; },
+          hooks: { beforeRelease: async () => { if (summaryThenClose !== null) { summaryThenClose(); await new Promise(resolve => setTimeout(resolve, 50)); } } },
           clock: { gateMs: 3000 },
           runtime: runtime => ({ ...runtime, call: async () => ({ code: 0, stdout: 'synthetic-id', stderr: '' }), attach,
             remove: async () => [],
