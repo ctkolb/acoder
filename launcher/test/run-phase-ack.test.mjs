@@ -24,13 +24,14 @@ const t = (name, fn) => nodeTest(name, { timeout: 60000 }, fn);
 //   agent-probe      — a phase-agent event and at once a probe-phase event;
 //   exit-after       — a phase-agent event, then the sidecar closes at once;
 //   exit-with-ack    — a phase-agent event; the sidecar closes in the same turn, right after the launcher has read the event;
-//   exit-during      — a phase-agent event; the sidecar closes 100 ms later, during the five-second lead (after the started file);
-//   duplicate-during — a phase-agent event; a second one 100 ms later, during the lead;
-//   invalid-during   — a phase-agent event; an invalid line 100 ms later, during the lead;
-//   fatal-during     — a phase-agent event; a fatal event 100 ms later, during the lead;
-//   summary-during   — a phase-agent event; a summary 100 ms later (an exit event with the sidecar still attached);
-//   summary-exit-during — a phase-agent event; after the started file (the beforeRelease hook) a summary and the sidecar's close, both
-//                         read by the launcher before the hook returns, so the order does not depend on load.
+// The -during variants answer with a phase-agent event, then act during the five-second lead, after the started file: in the beforeRelease
+// hook, which returns only once the launcher has read what the double did, so the order does not depend on load:
+//   exit-during         — the sidecar closes;
+//   duplicate-during    — a second phase-agent event;
+//   invalid-during      — an invalid line;
+//   fatal-during        — a fatal event;
+//   summary-during      — a summary (an exit event with the sidecar still attached);
+//   summary-exit-during — a summary and the sidecar's close.
 // Only `valid` may write the started file and send RELEASE; all fourteen checks pass in every variant.
 function inspectOf(plan, service, network) {
   const agent = service === 'agent';
@@ -66,7 +67,7 @@ async function launchWith(variant) {
       const commands = [];
       const sidecarLines = [];
       let plan;
-      let summaryThenClose = null;
+      let duringLead = null;
       const attach = name => {
         const agent = name.startsWith('acoder-agent-');
         const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
@@ -111,7 +112,6 @@ async function launchWith(variant) {
           if (line === 'CLOCK') queueMicrotask(() => emit({ event: 'clock', clock_epoch_ms: Date.now() }));
           if (line === 'CLOCK' && !agent && variant === 'early') queueMicrotask(() => emit({ event: 'phase', phase: 'agent' }));
           if (line.startsWith('PHASE ') && ['valid', 'wrong'].includes(variant)) queueMicrotask(() => emit({ event: 'phase', phase: variant === 'valid' ? 'agent' : 'probe' }));
-          const later = action => setTimeout(action, 100);
           if (line.startsWith('PHASE ') && variant === 'duplicate') queueMicrotask(() => { emit({ event: 'phase', phase: 'agent' }); emit({ event: 'phase', phase: 'agent' }); });
           if (line.startsWith('PHASE ') && variant === 'agent-probe') queueMicrotask(() => { emit({ event: 'phase', phase: 'agent' }); emit({ event: 'phase', phase: 'probe' }); });
           if (line.startsWith('PHASE ') && variant === 'exit-after') queueMicrotask(() => { emit({ event: 'phase', phase: 'agent' }); close(); });
@@ -119,14 +119,16 @@ async function launchWith(variant) {
           if (line.startsWith('PHASE ') && variant === 'exit-with-ack') { child.stdout.once('data', close); queueMicrotask(() => emit({ event: 'phase', phase: 'agent' })); }
           if (line.startsWith('PHASE ') && variant.endsWith('-during')) {
             queueMicrotask(() => emit({ event: 'phase', phase: 'agent' }));
-            if (variant === 'exit-during') later(close);
-            if (variant === 'duplicate-during') later(() => emit({ event: 'phase', phase: 'agent' }));
-            if (variant === 'invalid-during') later(() => child.stdout.write('not an event\n'));
-            if (variant === 'fatal-during') later(() => emit({ event: 'fatal', code: 'internal_error' }));
             const summary = () => emit({ event: 'summary', forwarded: 0, refused_probe: 3, refused_agent: 0, refused_by_reason: {},
               bytes_up: 0, bytes_down: 0, key_reflections: 0, usage_missing: 0, admitted_after_token_limit: 0, in_flight_at_limit: null, tokens: null });
-            if (variant === 'summary-during') later(summary);
-            if (variant === 'summary-exit-during') summaryThenClose = () => { summary(); close(); };
+            duringLead = {
+              'exit-during': close,
+              'duplicate-during': () => emit({ event: 'phase', phase: 'agent' }),
+              'invalid-during': () => child.stdout.write('not an event\n'),
+              'fatal-during': () => emit({ event: 'fatal', code: 'internal_error' }),
+              'summary-during': summary,
+              'summary-exit-during': () => { summary(); close(); },
+            }[variant];
           }
           if (line.startsWith('RELEASE ')) queueMicrotask(() => {
             emit({ event: 'released' });
@@ -146,7 +148,7 @@ async function launchWith(variant) {
         env: launcher.env(fx.env), deps: {
           launchEnabled: true,
           planTransform: value => { plan = value; return value; },
-          hooks: { beforeRelease: async () => { if (summaryThenClose !== null) { summaryThenClose(); await new Promise(resolve => setTimeout(resolve, 50)); } } },
+          hooks: { beforeRelease: async () => { if (duringLead !== null) { duringLead(); await new Promise(resolve => setTimeout(resolve, 50)); } } },
           clock: { gateMs: 3000 },
           runtime: runtime => ({ ...runtime, call: async () => ({ code: 0, stdout: 'synthetic-id', stderr: '' }), attach,
             remove: async () => [],
