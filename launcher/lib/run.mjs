@@ -652,13 +652,16 @@ async function launch({ options, settings, env }, deps, { changed, interrupt }) 
     // F-40-03: only the sidecar's answer to THIS command acknowledges it: the first phase event that arrives after the PHASE line was
     // written, and it must say phase agent (container/proxy.mjs emits exactly that once on the switch). An earlier event, or one in any
     // other phase, is no acknowledgement.
+    // F-42-02: the acknowledgement holds only while it is the one phase event after the mark and the sidecar still runs with no protocol
+    // or exit event (an invalid line, fatal, summary); it is checked right before the started file and again right before RELEASE.
     const phaseMark = ctx.sidecarEvents.length;
     const answers = () => ctx.sidecarEvents.slice(phaseMark).filter(event => event.event === 'phase');
+    const sidecarFailed = () => sidecar.state.exit !== null || ctx.sidecarInvalid === true || ctx.sidecarFatal === true || ctx.summary !== null;
+    const acknowledged = () => answers().length === 1 && answers()[0].phase === 'agent' && !sidecarFailed();
     sidecar.write(`PHASE agent ${deadline}`);
-    const phased = await until(() => answers().length > 0, releaseAt - now());
+    const phased = await until(() => answers().length > 0 || sidecarFailed(), releaseAt - now());
     halt('R');
-    if (!phased) throw new Boundary('R', 'runtime_failure');
-    if (answers().length > 0 && answers()[0].phase !== 'agent') throw new Boundary('R', 'runtime_failure');
+    if (!phased || !acknowledged()) throw new Boundary('R', 'runtime_failure');
     try {
       const fd = fs.openSync(writable.startedRecord, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o644);
       try {
@@ -673,8 +676,9 @@ async function launch({ options, settings, env }, deps, { changed, interrupt }) 
     await hooks.beforeRelease?.({ runId, names, endAgentInput: () => supervisor.end(), endSidecarInput: () => sidecar.end() });
     halt('R');
     if (now() > releaseAt) throw new Boundary('R', 'runtime_failure');
-    await until(() => false, releaseAt - now());
+    await until(() => !acknowledged(), releaseAt - now());
     halt('R');
+    if (!acknowledged()) throw new Boundary('R', 'runtime_failure');
     supervisor.write(`RELEASE ${runId} ${deadline}`);
     ctx.released = now();
     const releasedMono = process.hrtime.bigint();
@@ -735,6 +739,9 @@ async function launch({ options, settings, env }, deps, { changed, interrupt }) 
     const boundary = error instanceof Boundary ? error : new Boundary(ctx.startedFile ? 'R' : 'E3', 'runtime_failure', error);
     if (ctx.startedFile) {
       ctx.conditions.add(boundary.detail === 'interrupted' ? 'interrupted' : 'runtime_failure');
+      // F-42-02: a sidecar that failed or ended before RELEASE keeps its own condition (A3.7), as on the stop path of state T.
+      if (ctx.sidecarInvalid === true || ctx.sidecarFatal === true) ctx.conditions.add('egress_protocol_error');
+      else if (sidecar.state.exit !== null && ctx.summary === null) ctx.conditions.add('egress_sidecar_exited');
       logLine('launcher', `failure after the started file: ${boundary.detail}`);
       supervisor?.end();
       sidecar?.end();
@@ -990,15 +997,27 @@ async function removeNamedStaging(dir) {
   }
 }
 
+// F-42-01: the discovery listings are parsed strictly. A non-blank line is `<name>\t<run label>` as the LISTS format prints it, both
+// fields one token of a name's characters; the label value may be any run's (test resources carry `t<hex>`). Any other line (a warning,
+// a name without its label) makes the whole discovery unreliable: nothing is removed and no crashed record is written, so the command can
+// run again. Only the number of such lines is printed, never their text.
+const LISTED = /^([A-Za-z0-9][A-Za-z0-9_.-]*)\t([A-Za-z0-9][A-Za-z0-9_.-]*)$/;
 async function labelledResources(runtime) {
   const out = [];
+  let unparseable = 0;
   for (const [kind, args] of LISTS) {
     const result = await runtime.call(args);
     if (result.code !== 0) throw new Error(`the runtime could not list the labelled ${kind}s`);
     for (const line of result.stdout.split('\n')) {
-      const [name, run] = line.trim().split('\t');
-      if (name && run) out.push({ kind, name, run });
+      if (line.trim() === '') continue;
+      const fields = LISTED.exec(line);
+      if (fields === null) unparseable += 1;
+      else out.push({ kind, name: fields[1], run: fields[2] });
     }
+  }
+  if (unparseable > 0) {
+    throw new Error(`the runtime listing of labelled resources is unreliable: ${unparseable} unparseable line${unparseable === 1 ? '' : 's'}; `
+      + 'nothing was removed and no crashed record was written; run review cleanup again once the listing is clean');
   }
   return out;
 }
