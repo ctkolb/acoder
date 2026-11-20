@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import nodeTest from 'node:test';
-import { containerSkipReason, testRuntime } from './helpers/container-env.mjs';
+import { agentSkipReason, containerSkipReason, testRuntime } from './helpers/container-env.mjs';
 import { fixtureBase, forceRemove, LAUNCHER } from './helpers/fixtures.mjs';
 
 // G11: every test has a finite time limit of its own and is registered from this file.
@@ -30,6 +30,17 @@ t('dod12-skip: no runtime installed, or a daemon that does not answer, is a skip
   assert.equal(containerSkipReason({ ACODER_TEST_IMAGE: IMAGE }, { runtime: null, answers: yes }), 'no container runtime (docker or podman) is installed');
   assert.equal(containerSkipReason({ ACODER_TEST_IMAGE: IMAGE }, { runtime: 'podman', answers: no }), 'the podman daemon does not answer');
   assert.equal(containerSkipReason({ ACODER_TEST_IMAGE: IMAGE }, { runtime: 'docker', answers: yes }), false);
+});
+
+// A10 item 4, S6-AC12: the opencode tests also need ACODER_TEST_AGENT_IMAGE; without it they are skipped with that reason.
+t('dod12-skip: without ACODER_TEST_AGENT_IMAGE every opencode test is skipped with that reason', () => {
+  const env = extra => ({ ACODER_TEST_IMAGE: IMAGE, ...extra });
+  assert.equal(agentSkipReason(env({}), { runtime: 'docker', answers: yes }), 'ACODER_TEST_AGENT_IMAGE is not set');
+  assert.equal(agentSkipReason(env({ ACODER_TEST_AGENT_IMAGE: '' }), { runtime: 'docker', answers: yes }), 'ACODER_TEST_AGENT_IMAGE is not set');
+  assert.match(String(agentSkipReason(env({ ACODER_TEST_AGENT_IMAGE: 'opencode:1' }), { runtime: 'docker', answers: yes })), /ACODER_TEST_AGENT_IMAGE is not <name>@sha256/);
+  assert.equal(agentSkipReason({ ACODER_TEST_AGENT_IMAGE: IMAGE }, { runtime: 'docker', answers: yes }), 'ACODER_TEST_IMAGE is not set');
+  assert.equal(agentSkipReason(env({ ACODER_TEST_AGENT_IMAGE: IMAGE }), { runtime: 'docker', answers: no }), 'the docker daemon does not answer');
+  assert.equal(agentSkipReason(env({ ACODER_TEST_AGENT_IMAGE: `ref@${IMAGE}` }), { runtime: 'docker', answers: yes }), false);
 });
 
 t('dod12-skip: the runtime is docker when it is on PATH, else podman, else none', () => {

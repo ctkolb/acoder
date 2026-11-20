@@ -141,7 +141,10 @@ function testRuntimeSeam(options, context) {
 // The test topology of a container test (A11): the fixture, the internal network EXT with the stub endpoint (alias model.stub.test) and,
 // with options.forbidden, the forbidden server (alias forbidden.stub.test, TCP port 80). fn(context) runs the test; everything labelled
 // is removed afterwards and the test asserts that nothing labelled remains (S4-AC18). options: tag, scenario, steps (stub-steps.json),
-// skillFiles, endpoint ('good' | 'untrusted' | 'stopped'), answers ({sequence, default} of the stub endpoint), forbidden, fixture.
+// skillFiles, endpoint ('good' | 'untrusted' | 'stopped'), answers ({sequence, default} of the stub endpoint, or a function of the context
+// that sees the fixture), forbidden, fixture, endpointProgram (the path of another endpoint program, such as opencode-endpoint.mjs; it reads
+// the same /srv files and writes the same /out files), launchArgs (the [flag, value] pairs that choose the agent; default the stub adapter
+// with the scenario as its model) and set (further flag values that replace the fixture's).
 export async function withContainerEnv(options, fn) {
   const ids = testIds();
   const base = fs.realpathSync(fs.mkdtempSync(path.join(fixtureBase(), 'acr-')));
@@ -159,9 +162,9 @@ export async function withContainerEnv(options, fn) {
     context.caCert = path.join(certs, 'ca.pem');
     const srv = path.join(base, 'srv');
     fs.mkdirSync(srv);
-    fs.writeFileSync(path.join(srv, 'server.mjs'), ENDPOINT_PROGRAM);
+    fs.writeFileSync(path.join(srv, 'server.mjs'), options.endpointProgram ? fs.readFileSync(options.endpointProgram, 'utf8') : ENDPOINT_PROGRAM);
     fs.writeFileSync(path.join(srv, 'forbidden.mjs'), FORBIDDEN_PROGRAM);
-    fs.writeFileSync(path.join(srv, 'scenario.json'), JSON.stringify(options.answers ?? {}));
+    fs.writeFileSync(path.join(srv, 'scenario.json'), JSON.stringify((typeof options.answers === 'function' ? options.answers(context) : options.answers) ?? {}));
     const untrusted = options.endpoint === 'untrusted';
     fs.copyFileSync(path.join(certs, untrusted ? 'untrusted-key.pem' : 'key.pem'), path.join(srv, 'key.pem'));
     fs.copyFileSync(path.join(certs, untrusted ? 'untrusted-cert.pem' : 'cert.pem'), path.join(srv, 'cert.pem'));
@@ -186,10 +189,12 @@ export async function withContainerEnv(options, fn) {
     context.endpointCount = counter('count');
     context.endpointOpen = counter('open');
     context.forbiddenCount = counter('forbidden-count');
-    context.endpointRequests = () => (fs.existsSync(path.join(out, 'requests.jsonl')) ? fs.readFileSync(path.join(out, 'requests.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : []);
+    const jsonLines = name => (fs.existsSync(path.join(out, name)) ? fs.readFileSync(path.join(out, name), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : []);
+    context.endpointRequests = () => jsonLines('requests.jsonl');
+    context.endpointBodies = () => jsonLines('bodies.jsonl');
     context.argv = (extra = []) => fx.argv({
-      drop: ['--dry-run'], set: { '--image': IMAGE_ID(), '--model-endpoint': ENDPOINT },
-      add: [['--agent', 'stub'], ['--model', options.scenario ?? 'marker'], ['--extra-ca-cert', context.caCert], ...extra],
+      drop: ['--dry-run'], set: { '--image': IMAGE_ID(), '--model-endpoint': ENDPOINT, ...(options.set ?? {}) },
+      add: [...(options.launchArgs ?? [['--agent', 'stub'], ['--model', options.scenario ?? 'marker']]), ['--extra-ca-cert', context.caCert], ...extra],
     }).slice(2);
     context.runtimeSeam = testRuntimeSeam(options, context);
     return await fn(context);

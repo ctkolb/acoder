@@ -36,6 +36,17 @@ let cached;
 // Computed once per test file: the skip option of every container test.
 export const SKIP = (cached ??= containerSkipReason());
 export const IMAGE_ID = () => process.env.ACODER_TEST_IMAGE;
+// The opencode tests (S6, A10 item 4) also need ACODER_TEST_AGENT_IMAGE: an image that holds the agent CLI, in one of the two accepted forms.
+export function agentSkipReason(env = process.env, options = {}) {
+  const base = containerSkipReason(env, options);
+  if (base !== false) return base;
+  if (typeof env.ACODER_TEST_AGENT_IMAGE !== 'string' || env.ACODER_TEST_AGENT_IMAGE === '') return 'ACODER_TEST_AGENT_IMAGE is not set';
+  if (!IMAGE.test(env.ACODER_TEST_AGENT_IMAGE)) return 'ACODER_TEST_AGENT_IMAGE is not <name>@sha256:<64 hex> or sha256:<64 hex>';
+  return false;
+}
+let cachedAgent;
+export const AGENT_SKIP = () => (cachedAgent ??= agentSkipReason());
+export const AGENT_IMAGE_ID = () => process.env.ACODER_TEST_AGENT_IMAGE;
 export const RUNTIME = () => testRuntime();
 
 // One runtime call; resolves {code, stdout, stderr}. A call that does not end within `timeoutMs` is killed and resolves code null.
