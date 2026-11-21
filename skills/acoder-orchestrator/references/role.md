@@ -226,6 +226,72 @@ If index and artifacts disagree or the index is missing, reconcile from tickets,
 reports and acknowledged owner actions before dispatch. A role reports the gap
 and waits; it does not reconstruct state or select the newest-looking file.
 
+CONTAINER DISPATCH (opt-in; REVIEWER tickets only)
+Manual dispatch is the default and nothing above changes for it. Use this path
+only when the PROJECT block says "Reviewer dispatch: container" and names the
+launcher command, the model endpoint and the provider, or when the owner asks
+for it for one ticket. If the launcher command is not named, say so and
+dispatch manually. You prepare the command; the OWNER runs it. You never run
+a container command or a model session. The only launcher command you may run
+is `acoder export manifest`: it writes one manifest inside this mailbox and
+starts no container or session. You run no other launcher command.
+1. Ask the owner for ONE decision per ticket, in one message, with your
+   recommendation: the time limit, the call limit, the required token limit and scratch byte limit
+   (`--scratch-max-bytes`, or its default); the
+   image, by digest; the model and effort, or "launcher default". The endpoint
+   and the provider come from PROJECT; changing them is a separate owner
+   decision.
+2. Write the ticket as usual, with a "Dispatch: container" line in its header
+   block and limits equal to the decision. That line is the ticket's whole
+   isolation text; the reviewer role holds the rest. Write each export's
+   manifest with the PROJECT export tool if it emits the launcher format,
+   otherwise with `acoder export manifest`; keep it inside this mailbox and record the hash
+   of each manifest file and of the ticket file.
+3. Write <mailbox>/<stage>/launch-<tag>.md: the owner's decision, then the exact
+   launcher command with the ticket path and hash, this run's own mailbox
+   (never a directory that holds other mailboxes), each export with its
+   manifest and manifest hash, the image digest, the endpoint, the provider,
+   the model, the effort and the limits. Name every `--exclude` and why (for example another ticket's scratch `.git` or material the reviewer must not see). Name the environment variable that
+   holds the API key; never write, read or ask for a key. Also write the exact
+   `acoder review cleanup --mailbox <dir> --ticket <file>` command, substituting
+   this run’s absolute mailbox and ticket paths.
+4. Give the owner that command as the one next action, and ask for
+   "LAUNCH <tag> ended" with the launcher's last line when it returns. Leave
+   the ticket pending: the launcher itself requires a pending entry. A REWORK
+   cannot be sent to a container session: reissue as PROCESS OPTIONS d says
+   for a session that is gone.
+5. The launcher writes its records beside the report: run-<tag>.started.json
+   when it lets the reviewer start, then run-<tag>.json (the run record) and
+   run-<tag>.log; for an attempt that ended earlier, only
+   run-<tag>.notstarted-<id>.json and its log; cleanup may also write run-<tag>.crashed.json. These and launch-<tag>.md are
+   authorized mailbox records. On "LAUNCH <tag> ended", use the record the
+   launcher's last line names, never the newest-looking file:
+   - Refused or not started (no started file): the ticket stays pending. Tell
+     the owner the reason; the same command may be run again once it is fixed.
+   - Started file but no run record: the launcher did not finish. Acknowledge
+     the ticket as active, then mark it blocked. Tell the owner to run the exact `acoder review cleanup` command in launch-<tag>.md and send its output.
+   - Started with a run record: acknowledge the ticket as active, then check
+     the record BEFORE the report. The ticket hash and manifest hashes equal
+     the ones you recorded. The image digest, endpoint, provider, model, effort
+     and limits equal the owner's decision. Every recorded check passed. The
+     mailbox and the exports are read-only, and the only writable host paths
+     are the ticket's scratch folder and its two report files (the record
+     lists memory-backed work space separately). Every forwarded request went
+     to the endpoint host. Forwarded calls do not exceed the call limit, and
+     none was admitted after a token limit was reached. The secret scan is clean. Compare each response model string in the egress log: require an exact match to the configured model without its provider prefix; anything else, including a missing string, is reported as a limit, not silently treated as agreement. Treat scratch as untrusted: never open it with Git, an IDE or shell integration; read reports only. If any of these fails, do not accept the report: tell the owner
+     what differs.
+6. Exit reason "done" with those checks passed: continue with REVIEW REPORT
+   INTAKE (BUILD LOOP 4b), unchanged; a report that says it is blocked or
+   incomplete is still handled as that section says. "budget" or "error": for `budget` with all record checks passed, take both reports through REVIEW REPORT INTAKE as incomplete, then block and resume with a new ticket. For `error`, do not intake a report unless the owner asks; never intake one after `secret_found`. The ticket is blocked and a new ticket resumes the work.
+The run record is evidence of the environment and limits the launcher enforced,
+as your gate logs are evidence of the checks you ran: it is written outside the
+container, where the session cannot change it. Rely on it only after the
+launcher has been reviewed like other verification tooling. It is not evidence
+for any finding: the report stays a claim under EVIDENCE RULES, and every
+validator, reproduction, tier and closure rule applies unchanged. Describe a
+run as isolated only as far as that run's recorded checks show, and name it as
+the launcher's result, not your own observation.
+
 SESSION START
 Resolve the run type first (RUN TYPE). Then look for the handoff file named in
 PROJECT (if none is named, propose a path inside the mailbox and ask the owner

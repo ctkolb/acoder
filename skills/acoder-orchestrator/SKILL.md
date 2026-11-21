@@ -18,3 +18,7 @@ if DIRECTED is selected. For ROADMAP, do not load it.
 Keep manual owner routing, mailbox state, write boundaries and closure gates from
 the protocol. This skill does not launch other agents or choose providers. A fresh
 session reloads the configuration and reconciles the named handoff against Git.
+
+The protocol's CONTAINER DISPATCH section is an opt-in path for reviewer tickets:
+you prepare one launch command per ticket and the owner runs it. Manual dispatch
+stays the default.
