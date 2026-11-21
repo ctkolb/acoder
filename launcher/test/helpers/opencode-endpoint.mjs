@@ -1,11 +1,13 @@
 // The scripted model endpoint of the opencode tests (S6, RA15): a program that runs in the stub endpoint's container (HTTPS on 443 with the
 // test certificate, as the endpoint of container-run.mjs) and answers the real opencode as the OpenAI API would, for both request kinds the
 // openai profile admits: `POST <base>/responses` and `POST <base>/chat/completions`, streamed (event stream) or not. It never contacts
-// anything. /srv/scenario.json holds the script: {turns: [{tool, args} | {text}], usage: {input_tokens, output_tokens}, fail_after,
-// after: 'fail' | 'close'}. The turn of a conversation request is the number of tool results already in its conversation, so a request that
+// anything. /srv/scenario.json holds the script: {turns: [{tool, args} | {text}], usage: {input_tokens, output_tokens}, usage_delay_ms,
+// fail_after, after: 'fail' | 'close'}. With usage_delay_ms, a streamed answer sends everything but its last event at once and the last
+// event, the only one that carries the usage, that many milliseconds later (spec08-usage: the usage is withheld until the last event). The turn of a conversation request is the number of tool results already in its conversation, so a request that
 // opencode repeats gets the same answer; a request without tools (a side request such as a title) is answered with text. A string value in a
 // turn's args may hold {{run_id}} and {{skill_sha256}}, taken from the tool results in the conversation (the agent read /acoder/run.json).
-// Every request is counted in /out/count when its body has arrived; /out/requests.jsonl holds its headers and /out/bodies.jsonl its body.
+// Every request is counted in /out/count when its body has arrived; /out/requests.jsonl holds its headers and /out/bodies.jsonl its body,
+// the answer and the usage the endpoint sent with it (null when it sent none).
 // With fail_after N, every request after the N-th is answered by `after`: a 500 or a closed connection (spec16).
 import fs from 'node:fs';
 import https from 'node:https';
@@ -13,6 +15,7 @@ import https from 'node:https';
 const plan = fs.existsSync('/srv/scenario.json') ? JSON.parse(fs.readFileSync('/srv/scenario.json', 'utf8')) : {};
 const turns = plan.turns ?? [];
 const usage = plan.usage ?? { input_tokens: 11, output_tokens: 7 };
+const usageDelay = Number.isSafeInteger(plan.usage_delay_ms) ? plan.usage_delay_ms : 0;
 let count = 0;
 let open = 0;
 
@@ -80,8 +83,9 @@ function responses(res, body, answer, stream) {
     send({ type: 'response.content_part.done', item_id: item.id, output_index: 0, content_index: 0, part: item.content[0] });
   }
   send({ type: 'response.output_item.done', output_index: 0, item });
-  send({ type: 'response.completed', response: full });
-  return res.end();
+  const last = () => { if (!res.destroyed) { send({ type: 'response.completed', response: full }); res.end(); } };
+  if (usageDelay > 0) return void setTimeout(last, usageDelay);
+  return last();
 }
 
 function chat(res, body, answer, stream) {
@@ -99,9 +103,9 @@ function chat(res, body, answer, stream) {
   const chunk = (delta, finishReason = null, extra = {}) => sse(res, { id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta, finish_reason: finishReason }], ...extra });
   chunk(call ? { role: 'assistant', content: null, tool_calls: [call] } : { role: 'assistant', content: answer.text });
   chunk({}, finish);
-  sse(res, { id, object: 'chat.completion.chunk', created, model, choices: [], usage: chatUsage });
-  sse(res, '[DONE]');
-  return res.end();
+  const last = () => { if (!res.destroyed) { sse(res, { id, object: 'chat.completion.chunk', created, model, choices: [], usage: chatUsage }); sse(res, '[DONE]'); res.end(); } };
+  if (usageDelay > 0) return void setTimeout(last, usageDelay);
+  return last();
 }
 
 const server = https.createServer({ key: fs.readFileSync('/srv/key.pem'), cert: fs.readFileSync('/srv/cert.pem') }, (req, res) => {
@@ -116,7 +120,7 @@ const server = https.createServer({ key: fs.readFileSync('/srv/key.pem'), cert: 
     const failing = Number.isSafeInteger(plan.fail_after) && n > plan.fail_after;
     const answer = failing ? null : answerOf(body);
     fs.appendFileSync('/out/requests.jsonl', `${JSON.stringify({ n, mode: failing ? plan.after ?? 'fail' : 'script', url: req.url, rawHeaders: req.rawHeaders })}\n`);
-    fs.appendFileSync('/out/bodies.jsonl', `${JSON.stringify({ n, url: req.url, body: text, answer })}\n`);
+    fs.appendFileSync('/out/bodies.jsonl', `${JSON.stringify({ n, url: req.url, body: text, answer, usage: failing ? null : usage })}\n`);
     fs.writeFileSync('/out/count', String(n));
     open += 1;
     fs.writeFileSync('/out/open', String(open));
