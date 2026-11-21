@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Mutation runner for suites run with `node --test`; see "Mutation runner" in docs/tooling.md.
+// Mutation runner for suites run with `node --test`; see "Mutation runner" in docs/ci.md.
 // Test output is read from the structured events of this file's own `node --test` reporter (the default export),
 // so no result depends on the console format of one Node version.
 import { spawn } from 'node:child_process';
