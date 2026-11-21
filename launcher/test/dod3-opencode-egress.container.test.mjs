@@ -20,6 +20,10 @@ t('dod3-opencode-egress: opencode reaches nothing through the sidecar but the al
     assert.ok(agent.every(entry => entry.host === 'model.stub.test' && entry.status === 200 && entry.complete === true), 'each went to the allowlisted host and ended complete');
     assert.equal(agent.length, requests.length, 'the forwarded requests are the ones the endpoint received');
     assert.ok(requests.every(entry => ['/v1/responses', '/v1/chat/completions'].includes(entry.url)), 'only the admitted request kinds');
+    // A4 items 1 and 4: the permission JSON denies the web tools (and the question tool), so opencode does not offer them to the model.
+    const offered = new Set(bodies.flatMap(entry => (entry.json.tools ?? []).map(tool => tool.name)));
+    assert.ok(offered.has('read') && offered.has('apply_patch'), `opencode offered its tools: ${[...offered]}`);
+    assert.deepEqual(['webfetch', 'websearch', 'question'].filter(name => offered.has(name)), [], 'no denied tool is offered');
     // S6-AC13: the stream counts of the run.
     assertHealthyStreams(t, 'dod3-opencode-egress', record, bodies);
   });
