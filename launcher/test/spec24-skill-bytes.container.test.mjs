@@ -5,7 +5,7 @@ import path from 'node:path';
 import nodeTest from 'node:test';
 import { AGENT_SKIP } from './helpers/container-env.mjs';
 import { fixtureBase, forceRemove, LAUNCHER, sha } from './helpers/fixtures.mjs';
-import { assertNoHostOrPathRefusal, withOpencodeRun } from './helpers/opencode-run.mjs';
+import { assertHealthyStreams, assertNoHostOrPathRefusal, withOpencodeRun } from './helpers/opencode-run.mjs';
 import { minimalValue, reportTemplate, shapeErrors } from './helpers/reviewer-json-shape.mjs';
 import { treeHash } from './helpers/tree-hash.mjs';
 
@@ -48,7 +48,7 @@ function skillHashAtHead() {
 // and of the allowed values that the skill's report block states (reviewer-json-shape.mjs), whose isolation_note carries "container launch" and
 // the run_id it read, and the Markdown report that is its pair; the record describes both. The report's content is SCRIPTED (a minimal
 // valid report built from the skill's template): no model judgment is tested, only that such a report goes through the launch intact.
-t('spec24-skill-bytes: the payload skill is the reviewer skill of the tested commit byte for byte; the reports have the protocol\'s structure', async () => {
+t('spec24-skill-bytes: the payload skill is the reviewer skill of the tested commit byte for byte; the reports have the protocol\'s structure', async t => {
   assert.equal(git(['status', '--porcelain', '--', 'skills/acoder-reviewer']), '', 'the reviewer skill in the work tree is the tested commit\'s');
   const expected = skillHashAtHead();
   assert.ok(expected.text('SKILL.md').includes('An opt-in container launcher may start this session unattended.'), 'the skill contains R1');
@@ -79,5 +79,7 @@ t('spec24-skill-bytes: the payload skill is the reviewer skill of the tested com
     const jsonText = fs.readFileSync(fx.writable.reportJson);
     assert.deepEqual(record.reports.json, { path: fx.writable.reportJson, exists: true, bytes: jsonText.length, sha256: sha(jsonText), parses: true, session_matches: true });
     assertNoHostOrPathRefusal(record);
+    // S6-AC13: the stream counts of the run.
+    assertHealthyStreams(t, 'spec24-skill-bytes', record, bodies);
   });
 });
