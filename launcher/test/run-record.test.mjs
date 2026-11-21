@@ -182,9 +182,12 @@ t('A6.6 (F-40-01): the scratch directory this attempt created is removed after a
 }));
 
 t('A6.6 (F-40-01): a scratch path replaced by another directory after this attempt created it is not removed', () => withFixture({ noExport: true }, async fx => {
+  // The original is moved aside, not deleted, so the replacement cannot reuse its inode number (Linux file systems reuse a freed one at once).
   let before = null;
+  let originalIno = null;
   const run = await launch(fx, { onVolume: () => {
-    fs.rmdirSync(fx.writable.scratch);
+    originalIno = fs.statSync(fx.writable.scratch).ino;
+    fs.renameSync(fx.writable.scratch, `${fx.writable.scratch}.orig`);
     fs.mkdirSync(fx.writable.scratch, { mode: 0o700 });
     before = dirState(fx.writable.scratch);
   } });
@@ -192,4 +195,5 @@ t('A6.6 (F-40-01): a scratch path replaced by another directory after this attem
   assert.ok(before !== null);
   assert.ok(fs.existsSync(fx.writable.scratch), 'the replacing directory is kept');
   assert.deepEqual(dirState(fx.writable.scratch), before, 'and unchanged');
+  assert.notEqual(fs.statSync(fx.writable.scratch).ino, originalIno, 'the replacing directory has another inode than the one this attempt created');
 }));

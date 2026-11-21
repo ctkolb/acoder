@@ -269,11 +269,19 @@ t('snapshot race: the same file replaced by a different regular file after the l
   const source = path.join(fx.base, 'race-src2');
   fs.mkdirSync(source);
   fs.writeFileSync(path.join(source, 'victim.txt'), 'original\n');
+  // The original is moved aside, not deleted, so the replacement cannot reuse its inode number (Linux file systems reuse a freed one at once).
+  const inodes = {};
   const context = {
     kind: 'payload', label: 'race', limits: { bytes: 1000, entries: 10 }, counters: { bytes: 0, entries: 0 },
-    afterLstat: live => { fs.rmSync(live); fs.writeFileSync(live, 'a different file\n'); },
+    afterLstat: live => {
+      fs.renameSync(live, `${live}.orig`);
+      fs.writeFileSync(live, 'a different file\n');
+      inodes.original = fs.statSync(`${live}.orig`).ino;
+      inodes.replacement = fs.statSync(live).ino;
+    },
   };
   assert.match(thrownOf(() => copyTree(source, path.join(fx.base, 'race-copy2'), context)), /changed while it was copied/);
+  assert.notEqual(inodes.replacement, inodes.original, 'the replacing file has another inode than the original');
 }));
 t('snapshot: a symbolic link, a FIFO and a credential name in a payload tree are refused', () => withFixture({}, async fx => {
   const kinds = { 'a symbolic link': dir => fs.symlinkSync('x', path.join(dir, 'l')), 'a .git entry': dir => fs.mkdirSync(path.join(dir, '.GIT')), 'a credential name': dir => fs.writeFileSync(path.join(dir, '.PgPass'), 'x') };
