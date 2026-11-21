@@ -25,7 +25,7 @@ export function command({ model, effort, provider, firstMessage, workdir }) {
   if (!nonEmpty(firstMessage)) throw new Error('the first message is missing');
   if (typeof workdir !== 'string' || !/^\/[^\n\0]*$/.test(workdir)) throw new Error('the working directory must be an absolute path');
   const config = {
-    autoupdate: false, share: 'disabled', snapshot: false, enabled_providers: [provider.id],
+    autoupdate: false, share: 'disabled', snapshot: false, enabled_providers: [provider.id], small_model: `${provider.id}/${model}`,
     provider: {
       [provider.id]: {
         npm: '@ai-sdk/openai', options: { baseURL: provider.baseUrl, apiKey: provider.placeholderKey },
