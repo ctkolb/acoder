@@ -6,6 +6,7 @@ import nodeTest from 'node:test';
 import { AGENT_SKIP } from './helpers/container-env.mjs';
 import { fixtureBase, forceRemove, LAUNCHER, sha } from './helpers/fixtures.mjs';
 import { assertNoHostOrPathRefusal, withOpencodeRun } from './helpers/opencode-run.mjs';
+import { minimalValue, reportTemplate, shapeErrors } from './helpers/reviewer-json-shape.mjs';
 import { treeHash } from './helpers/tree-hash.mjs';
 
 // G11: every test has a finite time limit of its own and is registered from this file; skipped with the reason without a runtime,
@@ -41,26 +42,22 @@ function skillHashAtHead() {
   }
 }
 
-// The required fields of the reviewer's JSON report: the keys of the report block of the skill's protocol.
-function requiredReportFields(roleText) {
-  const block = /report-<tag>\.json: ONE valid JSON object[\s\S]*?```json\n([\s\S]*?)\n```/.exec(roleText);
-  assert.ok(block !== null, 'the protocol holds the JSON report block');
-  return Object.keys(JSON.parse(block[1]));
-}
-
 // S6-AC3 (DoD 9; SPEC-24) spec24-skill-bytes: the real reviewer skill of the tested commit (which contains R1 and R2) is the run's
 // --reviewer-skill; the record's skill hash equals the test's own hash of the skill at HEAD, and the agent saw the same hash in
-// /acoder/run.json. The scripted agent writes a JSON report with every required field of the protocol, whose isolation_note carries
-// "container launch" and the run_id it read, and the Markdown report that is its pair; the record describes both.
+// /acoder/run.json. The scripted agent writes a JSON report with every required field of the protocol, each carrying a value of the type
+// and of the allowed values that the skill's report block states (reviewer-json-shape.mjs), whose isolation_note carries "container launch" and
+// the run_id it read, and the Markdown report that is its pair; the record describes both. The report's content is SCRIPTED (a minimal
+// valid report built from the skill's template): no model judgment is tested, only that such a report goes through the launch intact.
 t('spec24-skill-bytes: the payload skill is the reviewer skill of the tested commit byte for byte; the reports have the protocol\'s structure', async () => {
   assert.equal(git(['status', '--porcelain', '--', 'skills/acoder-reviewer']), '', 'the reviewer skill in the work tree is the tested commit\'s');
   const expected = skillHashAtHead();
   assert.ok(expected.text('SKILL.md').includes('An opt-in container launcher may start this session unattended.'), 'the skill contains R1');
   assert.ok(expected.text('references/role.md').includes('CONTAINER MODE'), 'the skill contains R2');
-  const fields = requiredReportFields(expected.text('references/role.md'));
+  const template = reportTemplate(expected.text('references/role.md'));
+  const fields = Object.keys(template);
   const reports = fx => ({
     md: `# Review ${fx.tag}\n\nContainer launch, run_id {{run_id}}. Scripted report; the JSON report is its pair.`,
-    json: { ...Object.fromEntries(fields.map(field => [field, null])), session: fx.tag, isolation_note: 'container launch; run_id {{run_id}}', status: 'complete' },
+    json: { ...minimalValue(template), session: fx.tag, isolation_note: 'container launch; run_id {{run_id}}', status: 'complete' },
   });
   await withOpencodeRun({ set: { '--reviewer-skill': SKILL }, reports }, async ({ context: { fx }, done, record, bodies }) => {
     assert.equal(done.code, 0, `${done.stdout}${done.stderr}`);
@@ -70,6 +67,8 @@ t('spec24-skill-bytes: the payload skill is the reviewer skill of the tested com
     assert.ok(seen.some(text => text.includes(`"skill_sha256": "${expected.hash}"`)), 'the agent read the same skill hash in /acoder/run.json');
     const report = JSON.parse(fs.readFileSync(fx.writable.reportJson, 'utf8'));
     assert.deepEqual(fields.filter(field => !(field in report)), [], 'the JSON report has every required field');
+    assert.deepEqual(shapeErrors(report, template), [], 'each field carries a value of the type and allowed values the skill states');
+    assert.ok(['complete', 'incomplete', 'blocked'].includes(report.status) && ['READY', 'READY_WITH_CHANGES', 'NOT_READY'].includes(report.verdict), `status and verdict are allowed values: ${report.status}, ${report.verdict}`);
     assert.equal(report.session, fx.tag);
     assert.ok(report.isolation_note.includes('container launch') && report.isolation_note.includes(record.run_id), `isolation_note names the launch and the run_id: ${report.isolation_note}`);
     const md = fs.readFileSync(fx.writable.reportMd, 'utf8');
