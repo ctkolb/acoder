@@ -101,13 +101,21 @@ Limits to keep in mind:
   not a particular customer of a shared network edge.
 - Code the reviewer runs can also send requests through the second container. They
   are counted and limited like the agent's own.
-- A launcher that is killed writes no record. The containers still end by
-  themselves; `acoder review cleanup` removes labelled resources and the staging
-  directory named by a started file. Without that file, the owner inspects and removes
-  leftover staging, scratch and empty reports manually. A started ticket is not
-  launched again. Once a crashed record exists, a second `review cleanup` of the same
-  ticket is refused; leftovers it could not remove are named on standard error for
-  manual removal.
+- A launcher that is killed writes no final record. The containers still end by
+  themselves. `acoder review cleanup` finds the attempt's containers, volume and
+  network by their `acoder.run` label, matched against the run id of the ticket's
+  started file or, without one, of its not-started records. It removes those and the
+  staging directory named by a started file. If the launcher was killed before it
+  wrote either record, cleanup has no run id: it removes no labelled resource and
+  still exits 0. The owner then lists the resources labelled `acoder.run` with the
+  container runtime and removes those of that attempt, together with the staging,
+  scratch and empty reports, by hand. Without a started file, cleanup prints the
+  scratch and report paths it finds as owner actions. A started ticket is not
+  launched again. Cleanup writes the crashed record whenever the runtime's listing
+  succeeds, also when it removed nothing, so a second `review cleanup` of the same
+  ticket is refused; if the listing fails or holds a line it cannot read, it removes
+  nothing, writes no record and can be run again. Resources it could not remove are
+  named on standard error for manual removal.
 
 ## Container launcher
 
@@ -134,10 +142,10 @@ single-value flag, a missing required flag or a malformed value is refused.
 | `--image <ref>` | yes | `<name>@sha256:<digest>` or `sha256:<digest>`; a tag is refused. |
 | `--allow-image-env <NAME>` | no, repeatable | Accepts one environment variable the image defines outside the launcher's short list. |
 | `--model-endpoint <https URL>` | yes, unless the configuration file has `endpoint` | Base URL of the model API: `https`, a DNS host name, no port other than 443, no user info, query or fragment. |
-| `--provider <name>` | no | Provider profile; default from the configuration. |
-| `--model <id>` | no | Overrides the configured model. |
-| `--effort <level>` | no | Overrides the configured effort. |
-| `--agent <name>` | no | Agent adapter; default from the configuration. |
+| `--provider <name>` | no | Provider profile; default from the configuration. A name of `[a-z0-9-]+` that must be a registered provider (today `openai`) and one the agent adapter lists. |
+| `--model <id>` | no | Overrides the configured model; default from the configuration. `<id>` or `<provider>/<id>`, the id of `[A-Za-z0-9._:-]+`; a provider prefix must equal the selected provider. |
+| `--effort <level>` | no | Overrides the configured effort; default from the configuration. Lower-case letters only. |
+| `--agent <name>` | no | Agent adapter; default from the configuration. A name of `[a-z0-9-]+` that must be a registered adapter (today `opencode`). |
 | `--budget-minutes <n>` | yes | Wall-clock limit in minutes. |
 | `--budget-calls <n>` | yes | Limit on model requests the second container forwards. |
 | `--budget-tokens <n>` | yes | Token limit. |
@@ -154,7 +162,8 @@ single-value flag, a missing required flag or a malformed value is refused.
 | `--dry-run` | no | Runs the checks that need no container, prints the plan as JSON and leaves nothing behind. |
 
 Agent, provider, model, effort and max-in-flight come from the flag, then the owner
-configuration file, then `launcher/defaults.json`. The endpoint comes from the flag or
+configuration file, then `launcher/defaults.json`. The same value rules apply to these
+keys in the owner configuration file. The endpoint comes from the flag or
 the owner configuration file only.
 
 Exit codes: 0 done, 3 stopped at a limit, 1 error or ended before the reviewer
