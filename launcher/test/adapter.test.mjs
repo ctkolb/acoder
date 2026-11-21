@@ -44,7 +44,7 @@ t('dod1-adapter: command returns the argv, environment and inline configuration 
   });
   assert.deepEqual(parseJson(result.env.OPENCODE_PERMISSION), { '*': 'allow', external_directory: { '*': 'allow' }, doom_loop: 'allow', webfetch: 'deny', websearch: 'deny', question: 'deny' });
   assert.deepEqual(parseJson(content), {
-    autoupdate: false, share: 'disabled', snapshot: false, enabled_providers: ['openai'],
+    autoupdate: false, share: 'disabled', snapshot: false, enabled_providers: ['openai'], small_model: 'openai/gpt-6-luna',
     provider: { openai: { npm: '@ai-sdk/openai', options: { baseURL: 'http://models.example.org:8080/v1', apiKey: PLACEHOLDER }, models: { 'gpt-6-luna': { name: 'gpt-6-luna', reasoning: true, options: { reasoningEffort: 'high' } } } } },
   });
   // Another model and effort and directory; the endpoint path is passed through.
@@ -52,6 +52,7 @@ t('dod1-adapter: command returns the argv, environment and inline configuration 
   assert.deepEqual(other.argv.slice(7), ['/x/y', '-m', 'openai/gpt-5.1-mini:preview', INPUT.firstMessage]);
   const config = parseJson(other.env.OPENCODE_CONFIG_CONTENT);
   assert.deepEqual(Object.keys(config.provider.openai.models), ['gpt-5.1-mini:preview']);
+  assert.equal(config.small_model, 'openai/gpt-5.1-mini:preview', 'D-R47: opencode\'s side requests (the session title) use the run\'s model');
   assert.equal(config.provider.openai.models['gpt-5.1-mini:preview'].options.reasoningEffort, 'low');
   assert.equal(config.provider.openai.options.baseURL, 'http://api.example.org:8080/openai/v2');
   // The only key-like value anywhere is the placeholder, and the host environment is never read.
