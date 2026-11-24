@@ -24,7 +24,7 @@ export function formatLastLine({ tag, outcome, record }) {
   return `ACODER LAUNCH ${tag} ${outcome} ${record}`;
 }
 
-export const LAUNCHER_VERSION = '0.1.0';
+export const LAUNCHER_VERSION = '0.2.1';
 const GUARD = 'this build of the launcher is incomplete; container launch is disabled';
 const TICKET_NAME = /^ticket-([A-Za-z0-9._-]{1,120})\.md$/;
 

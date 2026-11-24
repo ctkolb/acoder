@@ -15,7 +15,7 @@ import { Refusal, safe } from './refusal.mjs';
 import { removeStaging } from './snapshot.mjs';
 import { evaluateRun } from './state.mjs';
 
-export const LAUNCHER_VERSION = '0.1.0';
+export const LAUNCHER_VERSION = '0.2.1';
 const LAUNCHER_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const AGENT_PROGRAMS = ['container/entry.mjs', 'container/probe.mjs', 'container/relay.mjs'];
 const EGRESS_PROGRAMS = ['container/proxy.mjs', 'container/accounting.mjs'];
