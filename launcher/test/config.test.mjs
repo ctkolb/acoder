@@ -122,11 +122,14 @@ t('model-id: the owner file loader refuses every form F1-F17 and accepts -x, --x
   for (const model of ['-x', '--x', '__proto__', 'x'.repeat(64), 'z-ai/glm-5.3', 'Z-AI/GLM-5:free']) assert.deepEqual(load(model), { model });
 }));
 
-t('model-id: launcher/defaults.json is checked with the same rule', () => withFixture({}, async fx => {
+// The defaults.json loader is checked with the whole table F1-F17 above, and accepts a slashed id and 64 characters.
+t('model-id: launcher/defaults.json refuses every form F1-F17 with the same rule', () => withFixture({}, async fx => {
   const file = path.join(fx.base, 'defaults.json');
   const load = model => { fs.writeFileSync(file, JSON.stringify({ ...DEFAULTS, model })); return attempt(() => loadDefaults(file)); };
-  assert.deepEqual(load('z-ai/glm-5.3'), { ...DEFAULTS, model: 'z-ai/glm-5.3' });
-  for (const model of ['a..b', 'a/./b', 'x'.repeat(65), 'a@b', '', 7]) assert.match(String(load(model).thrown), /defaults\.json: model/, JSON.stringify(model));
+  for (const model of ['z-ai/glm-5.3', 'x'.repeat(64)]) assert.deepEqual(load(model), { ...DEFAULTS, model });
+  for (const [form, models] of Object.entries(LOADER_REFUSED)) {
+    for (const model of models) assert.match(String(load(model).thrown), /launcher\/defaults\.json: model has a value that is not allowed/, `${form} ${JSON.stringify(model)}`);
+  }
 }));
 
 // S2-AC3: no flag accepts a key value; the key is read only from the environment variable named by --api-key-env.

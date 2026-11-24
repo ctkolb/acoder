@@ -110,10 +110,10 @@ t('accepts: --model is kept whole, with any number of slashes and any first segm
     assert.equal(parseJson(result.stdout).model, model);
   }
 }));
-// DoD 3: the forms F1-F16 of the plan sheet, one test each; F4 (NUL and other C0) cannot be passed in argv and is tested at the loader
-// and the adapter. A refusal compares the listing of the base before and after (expectRefusal).
+// DoD 3: the forms F1-F16 of the plan sheet, one test each. Of F4 only NUL cannot be passed in argv (it is tested at the loader and the
+// adapter); ESC and DEL go through argv and are refused here. A refusal compares the listing of the base before and after (expectRefusal).
 const MODEL_REFUSED = {
-  F1: [''], F2: ['a b', ' x', 'x '], F3: ['a\tb', 'a\nb', 'a\rb'], F5: ['glm‑5', 'é'], F6: ['a"b'], F7: ["a'b", 'a`b'], F8: ['a\\b'],
+  F1: [''], F2: ['a b', ' x', 'x '], F3: ['a\tb', 'a\nb', 'a\rb'], F4: ['a\u001bb', 'a\u007fb'], F5: ['glm‑5', 'é'], F6: ['a"b'], F7: ["a'b", 'a`b'], F8: ['a\\b'],
   F9: ['a..b', 'z-ai/../x', '..', '../x', 'x/..', '...'], F10: ['a/./b', './x', 'x/.', '.'], F11: ['/x'], F12: ['x/'], F13: ['a//b', '/', '//'], F14: ['a@b', 'z-ai/glm@5'],
   F15: ['a{b', 'a}b', 'a[b', 'a]b', 'a,b', 'a=b', 'a$b', 'a;b', 'a|b', 'a&b', 'a%b', 'a#b', 'a?b', 'a+b', 'a*b', 'a<b', 'a>b', 'a(b', 'a!b', 'a~b'],
   F16: ['x'.repeat(65), `a/${'b'.repeat(63)}`],
