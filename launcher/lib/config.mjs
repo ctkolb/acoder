@@ -2,7 +2,7 @@
 // The endpoint comes from the flag or the owner file only; it is in no tracked file.
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { checkEndpoint, positiveInteger } from './args.mjs';
+import { checkEndpoint, isModelId, positiveInteger } from './args.mjs';
 import { Refusal, safe } from './refusal.mjs';
 
 export const DEFAULTS_PATH = fileURLToPath(new URL('../defaults.json', import.meta.url));
@@ -11,7 +11,7 @@ const MAX_CONFIG_BYTES = 65536;
 const VALUE_CHECKS = {
   agent: value => typeof value === 'string' && /^[a-z0-9-]+$/.test(value),
   provider: value => typeof value === 'string' && /^[a-z0-9-]+$/.test(value),
-  model: value => typeof value === 'string' && /^(?:[a-z0-9-]+\/)?[A-Za-z0-9._:-]+$/.test(value),
+  model: isModelId,
   effort: value => typeof value === 'string' && /^[a-z]+$/.test(value),
   max_in_flight: value => Number.isInteger(value) && value >= 1 && value <= 16,
 };
@@ -56,16 +56,14 @@ export function resolveSettings({ options, owner, defaults, adapters, providers 
   if (!registered(adapters, agent)) throw new Refusal(`unknown agent ${safe(agent)}`);
   if (!registered(providers, provider)) throw new Refusal(`unknown provider ${safe(provider)}`);
   if (!adapters[agent].providers.includes(provider)) throw new Refusal(`agent ${agent} does not list provider ${provider}`);
-  const modelLabel = options.model === null ? 'the configured model' : '--model';
-  const rawModel = pick(options.model, 'model');
-  const slash = rawModel.indexOf('/');
-  if (slash >= 0 && rawModel.slice(0, slash) !== provider) throw new Refusal(`${modelLabel} has the provider prefix ${safe(rawModel.slice(0, slash))}, not ${provider}`);
+  // D-2 (rule R-A): the model id is opaque; nothing is stripped and no segment is compared with the provider.
+  const model = pick(options.model, 'model');
   const endpoint = options.modelEndpoint ?? owner.endpoint;
   if (endpoint === undefined) throw new Refusal('no model endpoint: give --model-endpoint or set "endpoint" in the owner configuration file');
   const maxInFlight = options.maxInFlight ?? owner.max_in_flight ?? defaults.max_in_flight;
   const limits = { wall_seconds: options.budgetMinutes * 60, calls: options.budgetCalls, tokens: options.budgetTokens, max_in_flight: maxInFlight, scratch_max_bytes: options.scratchMaxBytes };
   positiveInteger(String(limits.wall_seconds), '--budget-minutes');
-  return { agent, provider, model: rawModel.slice(slash + 1), effort: pick(options.effort, 'effort'), maxInFlight, endpoint, limits };
+  return { agent, provider, model, effort: pick(options.effort, 'effort'), maxInFlight, endpoint, limits };
 }
 
 // A8.2: the key is read only from the named host variable; the message never holds the value.

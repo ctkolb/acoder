@@ -9,7 +9,8 @@ const HEX64 = /^[0-9a-f]{64}$/;
 const NAME = /^[a-z0-9-]+$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const IMAGE = /^(?:[A-Za-z0-9][A-Za-z0-9._/:-]*@)?sha256:[0-9a-f]{64}$/;
-const MODEL = /^(?:[a-z0-9-]+\/)?[A-Za-z0-9._:-]+$/;
+const MODEL = /^[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/;
+const MODEL_MAX = 128;
 
 export function positiveInteger(value, label, maximum = Number.MAX_SAFE_INTEGER) {
   if (typeof value !== 'string' || !/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > maximum) {
@@ -40,6 +41,15 @@ export function checkEndpoint(value, label) {
   return value;
 }
 
+// D-2 (rule R-A): a model id is opaque and sent to the provider as given; a "/" is part of it. One or more "/"-separated segments of
+// [A-Za-z0-9._:-], no ".." anywhere, no "." segment, 1 to 128 characters, so it cannot alter argv or the generated JSON configuration.
+export const isModelId = value => typeof value === 'string' && value.length <= MODEL_MAX && MODEL.test(value) && !value.includes('..') && !value.split('/').includes('.');
+
+export function checkModelId(value, label) {
+  if (!isModelId(value)) throw new Refusal(`${label} must be a model id: /-separated segments of [A-Za-z0-9._:-], no .. or . segment, at most ${MODEL_MAX} characters`);
+  return value;
+}
+
 function checkExclude(value, label) {
   if (value === '' || path.isAbsolute(value) || value.includes('\0') || value.split('/').some(part => part === '' || part === '.' || part === '..')) {
     throw new Refusal(`${label} must be a relative path inside the mailbox without empty, . or .. parts`);
@@ -57,7 +67,7 @@ const REVIEW_FLAGS = {
   '--image': { key: 'image', parse: pattern(IMAGE, '<name>@sha256:<64 hex> or sha256:<64 hex> (a tag is refused)') },
   '--allow-image-env': { key: 'allowImageEnv', repeat: true, parse: pattern(ENV_NAME, 'an environment variable name') },
   '--model-endpoint': { key: 'modelEndpoint', parse: checkEndpoint }, '--provider': { key: 'provider', parse: pattern(NAME, 'a provider name') },
-  '--model': { key: 'model', parse: pattern(MODEL, 'a model id, optionally <provider>/<id>') }, '--effort': { key: 'effort', parse: pattern(/^[a-z]+$/, 'lower-case letters') },
+  '--model': { key: 'model', parse: checkModelId }, '--effort': { key: 'effort', parse: pattern(/^[a-z]+$/, 'lower-case letters') },
   '--agent': { key: 'agent', parse: pattern(NAME, 'an adapter name') },
   '--budget-minutes': { key: 'budgetMinutes', parse: positiveInteger }, '--budget-calls': { key: 'budgetCalls', parse: positiveInteger }, '--budget-tokens': { key: 'budgetTokens', parse: positiveInteger },
   '--max-in-flight': { key: 'maxInFlight', parse: (value, label) => positiveInteger(value, label, 16) },

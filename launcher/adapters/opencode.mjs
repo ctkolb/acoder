@@ -11,13 +11,15 @@ const FIXED_ENV = {
   OPENCODE_CONFIG_DIR: '/agent/config', XDG_CONFIG_HOME: '/agent/xdg/config', XDG_DATA_HOME: '/agent/xdg/data', XDG_CACHE_HOME: '/agent/xdg/cache', XDG_STATE_HOME: '/agent/xdg/state',
   HOME: '/agent/user', TMPDIR: '/work/tmp',
 };
-const MODEL = /^[A-Za-z0-9._:-]+$/;
+// D-2 (rule R-A): the same model id rule as launcher/lib/args.mjs, checked here on its own; the id is passed whole as <provider>/<id>.
+const MODEL = /^[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/;
+const isModelId = value => typeof value === 'string' && value.length <= 128 && MODEL.test(value) && !value.includes('..') && !value.split('/').includes('.');
 const EFFORT = /^[a-z]+$/;
 const nonEmpty = value => typeof value === 'string' && value !== '';
 
 // input = {model, effort, provider: {id, baseUrl, placeholderKey}, firstMessage, workdir}; returns {argv, env} (A4: invocation, environment, inline configuration).
 export function command({ model, effort, provider, firstMessage, workdir }) {
-  if (typeof model !== 'string' || !MODEL.test(model)) throw new Error('the model id is not allowed');
+  if (!isModelId(model)) throw new Error('the model id is not allowed');
   if (typeof effort !== 'string' || !EFFORT.test(effort)) throw new Error('the effort is not allowed');
   if (provider === null || typeof provider !== 'object' || !providers.includes(provider.id)) throw new Error('this adapter does not drive that provider');
   if (!nonEmpty(provider.placeholderKey)) throw new Error('the placeholder key is missing');
