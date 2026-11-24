@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import nodeTest from 'node:test';
 import { listing, withFixture, parseJson } from './helpers/fixtures.mjs';
 import { PLACEHOLDER_KEY } from '../lib/plan.mjs';
+import { LAUNCHER_VERSION as CLI_VERSION } from '../lib/cli.mjs';
+import { LAUNCHER_VERSION as RUN_VERSION } from '../lib/run.mjs';
 
 // G11: every test has a finite time limit of its own. The test is registered from this file, so that the mutation runner can count it per module.
 const t = (name, fn, timeout = 30000) => nodeTest(name, { timeout }, async (...args) => {
@@ -49,6 +51,14 @@ t('dry-run: --model z-ai/glm-5.3 is the plan model and the agent command passes 
   assert.equal(config.small_model, 'openai/z-ai/glm-5.3');
   assert.deepEqual(Object.keys(config.provider.openai.models), ['z-ai/glm-5.3']);
   assert.equal(config.provider.openai.models['z-ai/glm-5.3'].name, 'z-ai/glm-5.3');
+}));
+
+// v0.2.1: the launcher version of the dry-run plan and of the run record is the release version.
+t('dry-run: the launcher version is 0.2.1 in both modules and in the plan\'s run.json', () => withFixture({}, async fx => {
+  assert.deepEqual([CLI_VERSION, RUN_VERSION], ['0.2.1', '0.2.1']);
+  const result = await fx.run();
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(JSON.parse(parseJson(result.stdout).launch.payload_files.agent['run.json']).launcher_version, '0.2.1');
 }));
 
 const mountValues = args => args.flatMap((arg, index) => (args[index - 1] === '--mount' ? [arg] : []));
