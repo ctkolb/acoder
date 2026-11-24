@@ -103,7 +103,7 @@ for (const value of ['https://models.example.org', 'https://models.example.org:4
 }
 // D-2 (rule R-A): a model id is opaque. A slash is part of the id; nothing is stripped and no segment is compared with the provider.
 t('accepts: --model is kept whole, with any number of slashes and any first segment', () => withFixture({}, async fx => {
-  const models = ['z-ai/glm-5.3', 'openai/gpt-x', 'anthropic/claude-x', 'other/gpt-x', 'gpt-x', 'a/b/c', 'Z-AI/GLM-5:free', 'a.b/.c/d.', '-x', '__proto__', 'x'.repeat(128), `a/${'b'.repeat(126)}`];
+  const models = ['z-ai/glm-5.3', 'openai/gpt-x', 'anthropic/claude-x', 'other/gpt-x', 'gpt-x', 'a/b/c', 'Z-AI/GLM-5:free', 'a.b/.c/d.', '-x', '__proto__', 'x'.repeat(64), `a/${'b'.repeat(62)}`];
   for (const model of models) {
     const result = await fx.run({ add: [['--provider', 'openai'], ['--model', model]] });
     assert.equal(result.code, 0, `${model}: ${result.stderr}`);
@@ -116,7 +116,7 @@ const MODEL_REFUSED = {
   F1: [''], F2: ['a b', ' x', 'x '], F3: ['a\tb', 'a\nb', 'a\rb'], F5: ['glm‑5', 'é'], F6: ['a"b'], F7: ["a'b", 'a`b'], F8: ['a\\b'],
   F9: ['a..b', 'z-ai/../x', '..', '../x', 'x/..', '...'], F10: ['a/./b', './x', 'x/.', '.'], F11: ['/x'], F12: ['x/'], F13: ['a//b', '/', '//'], F14: ['a@b', 'z-ai/glm@5'],
   F15: ['a{b', 'a}b', 'a[b', 'a]b', 'a,b', 'a=b', 'a$b', 'a;b', 'a|b', 'a&b', 'a%b', 'a#b', 'a?b', 'a+b', 'a*b', 'a<b', 'a>b', 'a(b', 'a!b', 'a~b'],
-  F16: ['x'.repeat(129), `a/${'b'.repeat(127)}`],
+  F16: ['x'.repeat(65), `a/${'b'.repeat(63)}`],
 };
 for (const [form, models] of Object.entries(MODEL_REFUSED)) {
   t(`refuses: --model form ${form}`, () => withFixture({}, async fx => {

@@ -110,23 +110,23 @@ t('model-id: through the command, "model": "z-ai/glm-5.3" in the --config file i
 const LOADER_REFUSED = {
   F1: [''], F2: ['a b'], F3: ['a\tb', 'a\nb', 'a\rb'], F4: ['a\u0000b', 'a\u001bb', 'a\u007fb'], F5: ['glm‑5', 'é'], F6: ['a"b'], F7: ["a'b", 'a`b'], F8: ['a\\b'],
   F9: ['a..b', 'z-ai/../x', '..'], F10: ['a/./b', './x', '.'], F11: ['/x'], F12: ['x/'], F13: ['a//b', '/'], F14: ['a@b', 'z-ai/glm@5'],
-  F15: ['a{b', 'a}b', 'a[b', 'a,b', 'a=b', 'a$b', 'a;b', 'a|b', 'a&b', 'a%b', 'a#b', 'a?b', 'a+b', 'a*b', 'a<b'], F16: ['x'.repeat(129), `a/${'b'.repeat(127)}`],
+  F15: ['a{b', 'a}b', 'a[b', 'a,b', 'a=b', 'a$b', 'a;b', 'a|b', 'a&b', 'a%b', 'a#b', 'a?b', 'a+b', 'a*b', 'a<b'], F16: ['x'.repeat(65), `a/${'b'.repeat(63)}`],
   F17: [7, null, [], {}, true],
 };
-t('model-id: the owner file loader refuses every form F1-F17 and accepts -x, --x, __proto__ and 128 characters', () => withFixture({}, async fx => {
+t('model-id: the owner file loader refuses every form F1-F17 and accepts -x, --x, __proto__ and 64 characters', () => withFixture({}, async fx => {
   const file = path.join(fx.base, 'owner.json');
   const load = model => { fs.writeFileSync(file, JSON.stringify({ model })); return attempt(() => loadOwnerConfig(file)); };
   for (const [form, models] of Object.entries(LOADER_REFUSED)) {
     for (const model of models) assert.match(String(load(model).thrown), /the owner configuration file: model has a value that is not allowed/, `${form} ${JSON.stringify(model)}`);
   }
-  for (const model of ['-x', '--x', '__proto__', 'x'.repeat(128), 'z-ai/glm-5.3', 'Z-AI/GLM-5:free']) assert.deepEqual(load(model), { model });
+  for (const model of ['-x', '--x', '__proto__', 'x'.repeat(64), 'z-ai/glm-5.3', 'Z-AI/GLM-5:free']) assert.deepEqual(load(model), { model });
 }));
 
 t('model-id: launcher/defaults.json is checked with the same rule', () => withFixture({}, async fx => {
   const file = path.join(fx.base, 'defaults.json');
   const load = model => { fs.writeFileSync(file, JSON.stringify({ ...DEFAULTS, model })); return attempt(() => loadDefaults(file)); };
   assert.deepEqual(load('z-ai/glm-5.3'), { ...DEFAULTS, model: 'z-ai/glm-5.3' });
-  for (const model of ['a..b', 'a/./b', 'x'.repeat(129), 'a@b', '', 7]) assert.match(String(load(model).thrown), /defaults\.json: model/, JSON.stringify(model));
+  for (const model of ['a..b', 'a/./b', 'x'.repeat(65), 'a@b', '', 7]) assert.match(String(load(model).thrown), /defaults\.json: model/, JSON.stringify(model));
 }));
 
 // S2-AC3: no flag accepts a key value; the key is read only from the environment variable named by --api-key-env.

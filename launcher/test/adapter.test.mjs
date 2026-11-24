@@ -77,13 +77,13 @@ t('dod1-adapter: command returns the argv, environment and inline configuration 
 const MODEL_REFUSED = {
   F1: [''], F2: ['a b'], F3: ['a\tb', 'a\nb', 'a\rb'], F4: ['a\u0000b', 'a\u001bb', 'a\u007fb'], F5: ['glm‑5', 'é'], F6: ['a"b'], F7: ["a'b", 'a`b'], F8: ['a\\b'],
   F9: ['a..b', 'z-ai/../x', '..'], F10: ['a/./b', './x', '.'], F11: ['/x'], F12: ['x/'], F13: ['a//b', '/'], F14: ['a@b', 'z-ai/glm@5'],
-  F15: ['a{b', 'a}b', 'a[b', 'a,b', 'a=b', 'a$b', 'a;b', 'a|b', 'a&b', 'a%b', 'a#b', 'a?b', 'a+b', 'a*b', 'a<b'], F16: ['x'.repeat(129), `a/${'b'.repeat(127)}`],
+  F15: ['a{b', 'a}b', 'a[b', 'a,b', 'a=b', 'a$b', 'a;b', 'a|b', 'a&b', 'a%b', 'a#b', 'a?b', 'a+b', 'a*b', 'a<b'], F16: ['x'.repeat(65), `a/${'b'.repeat(63)}`],
   F17: [7, null, [], {}, true],
 };
 
 // DoD 1 and D-2 (rule R-A): the full id goes to opencode as <provider>/<id>; the models key and name are the id as given.
 t('model-id: command passes the full id, -m <provider>/<id>, small_model <provider>/<id> and the id as the models key and name', () => {
-  for (const model of ['z-ai/glm-5.3', 'openai/gpt-x', 'anthropic/claude-x', 'gpt-x', 'a/b/c', 'Z-AI/GLM-5:free', '-x', '--x', '__proto__', 'x'.repeat(128)]) {
+  for (const model of ['z-ai/glm-5.3', 'openai/gpt-x', 'anthropic/claude-x', 'gpt-x', 'a/b/c', 'Z-AI/GLM-5:free', '-x', '--x', '__proto__', 'x'.repeat(64)]) {
     const result = command({ model });
     assert.deepEqual(result.argv.slice(8, 10), ['-m', `openai/${model}`], model);
     const config = parseJson(result.env.OPENCODE_CONFIG_CONTENT);
