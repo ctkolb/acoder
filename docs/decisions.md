@@ -43,3 +43,7 @@ Quoted from the confirmed PROJECT brief:
 The model id is opaque: it is the exact string sent to the provider. A `/` is part of the id. Nothing is stripped, and no segment is compared with a provider name. The adapter always emits `<provider>/<full id>`; with `--provider openai`, `z-ai/glm-5.3` becomes `-m openai/z-ai/glm-5.3`, and an OpenRouter id whose first segment equals the provider, `openai/gpt-x`, becomes `-m openai/openai/gpt-x`.
 
 A model id is one or more `/`-separated segments of `[A-Za-z0-9._:-]` (pattern `^[A-Za-z0-9._:-]+(?:/[A-Za-z0-9._:-]+)*$`), with no `..` anywhere, no segment that is exactly `.`, and a length of 1 to 128 characters. The same rule applies to `--model`, the owner configuration file, `launcher/defaults.json` and the opencode adapter.
+
+## D-3 (2026-11-24): a model id has at most 64 characters (amends D-2)
+
+Owner decision after review r3 (finding R-02, "Accept recommendations"): the length limit of D-2 is lowered from 128 to 64 characters, the width at which the sidecar records the response model, so the exact comparison of the response model with the configured `agent.model` can always succeed. Everything else in D-2 is unchanged.
