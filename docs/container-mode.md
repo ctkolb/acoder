@@ -143,7 +143,7 @@ single-value flag, a missing required flag or a malformed value is refused.
 | `--allow-image-env <NAME>` | no, repeatable | Accepts one environment variable the image defines outside the launcher's short list. |
 | `--model-endpoint <https URL>` | yes, unless the configuration file has `endpoint` | Base URL of the model API: `https`, a DNS host name, no port other than 443, no user info, query or fragment. |
 | `--provider <name>` | no | Provider profile; default from the configuration. A name of `[a-z0-9-]+` that must be a registered provider (today `openai`) and one the agent adapter lists. |
-| `--model <id>` | no | Overrides the configured model; default from the configuration. `<id>` or `<provider>/<id>`, the id of `[A-Za-z0-9._:-]+`; a provider prefix must equal the selected provider. |
+| `--model <id>` | no | Overrides the configured model; default from the configuration. `<id>` is one or more `/`-separated segments of `[A-Za-z0-9._:-]`, with no `..` and no `.` segment, at most 128 characters. It is sent to the provider as given, for example the OpenRouter id `z-ai/glm-5.3`: a `/` is part of the id, nothing is stripped and no segment is compared with `--provider` (`openai/gpt-x` is the id `openai/gpt-x`). |
 | `--effort <level>` | no | Overrides the configured effort; default from the configuration. Lower-case letters only. |
 | `--agent <name>` | no | Agent adapter; default from the configuration. A name of `[a-z0-9-]+` that must be a registered adapter (today `opencode`). |
 | `--budget-minutes <n>` | yes | Wall-clock limit in minutes. |
@@ -163,7 +163,8 @@ single-value flag, a missing required flag or a malformed value is refused.
 
 Agent, provider, model, effort and max-in-flight come from the flag, then the owner
 configuration file, then `launcher/defaults.json`. The same value rules apply to these
-keys in the owner configuration file. The endpoint comes from the flag or
+keys in the owner configuration file. `model` follows the rule of `--model`, so
+`"model": "z-ai/glm-5.3"` is accepted and passed whole. The endpoint comes from the flag or
 the owner configuration file only.
 
 Exit codes: 0 done, 3 stopped at a limit, 1 error or ended before the reviewer
