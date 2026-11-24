@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import nodeTest from 'node:test';
 import { AGENT_SKIP } from './helpers/container-env.mjs';
 import { lastLine } from './helpers/fixtures.mjs';
-import { assertHealthyStreams, assertNoHostOrPathRefusal, DEFAULT_EFFORT, DEFAULT_MODEL, withOpencodeRun } from './helpers/opencode-run.mjs';
+import { assertHealthyStreams, assertNoHostOrPathRefusal, DEFAULT_EFFORT, DEFAULT_MODEL, defaultReports, withOpencodeRun } from './helpers/opencode-run.mjs';
 
 // G11: every test has a finite time limit of its own and is registered from this file; skipped with the reason without a runtime,
 // ACODER_TEST_IMAGE or ACODER_TEST_AGENT_IMAGE (A10 item 4, S6-AC12).
@@ -11,8 +11,8 @@ const t = (name, fn, timeout = 300000) => nodeTest(name, { timeout, skip: AGENT_
 
 // S6-AC2 (DoD 1): one run of the real opencode, one call of main with flags only and no prompt (standard input closed); the expected model
 // and effort of every request the endpoint received. F17: every request opencode sent is `POST <base>/responses`. S6-AC13: the stream counts.
-async function runAndCheck(t, label, { extraArgs = [], model, effort }) {
-  await withOpencodeRun({ extraArgs }, async ({ context: { fx }, done, record, bodies, requests }) => {
+async function runAndCheck(t, label, { extraArgs = [], model, effort, turns, tools }) {
+  await withOpencodeRun({ extraArgs, turns }, async ({ context: { fx }, done, record, bodies, requests }) => {
     assert.equal(done.code, 0, `${done.stdout}${done.stderr}`);
     assert.equal(lastLine(done.stdout), `ACODER LAUNCH ${fx.tag} done ${fx.writable.runRecord}`);
     assert.deepEqual([record.exit_reason, record.error_detail, record.conditions], ['done', null, []]);
@@ -27,6 +27,7 @@ async function runAndCheck(t, label, { extraArgs = [], model, effort }) {
     // chose gpt-5.4-nano with effort none and service_tier flex for the title).
     const conversation = bodies.filter(entry => Array.isArray(entry.json.tools) && entry.json.tools.length > 0);
     assert.ok(conversation.length >= 4, `the read, the two report writes and the closing text were requested (${conversation.length})`);
+    if (tools) for (const entry of conversation) assert.ok(tools.every(name => entry.json.tools.some(tool => tool.name === name)), `request ${entry.n} offers ${tools}`);
     assert.deepEqual(bodies.map(entry => [entry.json.model, entry.json.reasoning?.effort]), bodies.map(() => [model, effort]), 'every request names the run\'s model and effort');
     assert.deepEqual(bodies.filter(entry => 'service_tier' in entry.json).map(entry => entry.n), [], 'no request asks for a service tier the owner did not choose');
     assertNoHostOrPathRefusal(record);
@@ -44,5 +45,15 @@ t('dod1-opencode: --model and --effort override the defaults in every request', 
 
 // v0.2.1 DoD 1, C-1 (rule R-A, RA-1): an OpenRouter-style id with a slash reaches the endpoint whole in every request opencode sends.
 t('dod1-opencode: --model z-ai/glm-5.3 names the full id in every request and in the record', async t => {
-  await runAndCheck(t, 'dod1-opencode slashed model', { extraArgs: [['--model', 'z-ai/glm-5.3']], model: 'z-ai/glm-5.3', effort: DEFAULT_EFFORT });
+  // opencode 1.19.5 offers apply_patch only for GPT model ids; for z-ai/glm-5.3 it offers write (observed in S2), so the script writes with it.
+  const turns = fx => {
+    const reports = defaultReports(fx);
+    return [
+      { tool: 'read', args: { filePath: '/acoder/run.json' } },
+      { tool: 'write', args: { filePath: fx.writable.reportMd, content: reports.md } },
+      { tool: 'write', args: { filePath: fx.writable.reportJson, content: JSON.stringify(reports.json) } },
+      { text: 'Both report files are written.' },
+    ];
+  };
+  await runAndCheck(t, 'dod1-opencode slashed model', { extraArgs: [['--model', 'z-ai/glm-5.3']], model: 'z-ai/glm-5.3', effort: DEFAULT_EFFORT, turns, tools: ['read', 'write'] });
 });
