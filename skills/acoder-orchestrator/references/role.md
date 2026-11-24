@@ -278,7 +278,7 @@ starts no container or session. You run no other launcher command.
      are the ticket's scratch folder and its two report files (the record
      lists memory-backed work space separately). Every forwarded request went
      to the endpoint host. Forwarded calls do not exceed the call limit, and
-     none was admitted after a token limit was reached. The secret scan is clean. Compare each response model string in the egress log: require an exact match to the configured model without its provider prefix; anything else, including a missing string, is reported as a limit, not silently treated as agreement. Treat scratch as untrusted: never open it with Git, an IDE or shell integration; read reports only. If any of these fails, do not accept the report: tell the owner
+     none was admitted after a token limit was reached. The secret scan is clean. Compare each forwarded response model string in the egress log: require an exact match to the full configured model, the record's agent.model as given (not the extra provider segment the launcher adds in front of it in opencode's -m argument); anything else, including a missing string, is reported as a limit, not silently treated as agreement. Treat scratch as untrusted: never open it with Git, an IDE or shell integration; read reports only. If any of these fails, do not accept the report: tell the owner
      what differs.
 6. Exit reason "done" with those checks passed: continue with REVIEW REPORT
    INTAKE (BUILD LOOP 4b), unchanged; a report that says it is blocked or
