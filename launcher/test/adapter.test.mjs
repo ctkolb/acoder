@@ -73,6 +73,30 @@ t('dod1-adapter: command returns the argv, environment and inline configuration 
   assert.deepEqual(input, INPUT, 'the input is not changed');
 });
 
+// DoD 3: the adapter refuses the forms F1-F17 of the plan sheet on its own (it imports nothing from the launcher).
+const MODEL_REFUSED = {
+  F1: [''], F2: ['a b'], F3: ['a\tb', 'a\nb', 'a\rb'], F4: ['a\u0000b', 'a\u001bb', 'a\u007fb'], F5: ['glm‑5', 'é'], F6: ['a"b'], F7: ["a'b", 'a`b'], F8: ['a\\b'],
+  F9: ['a..b', 'z-ai/../x', '..'], F10: ['a/./b', './x', '.'], F11: ['/x'], F12: ['x/'], F13: ['a//b', '/'], F14: ['a@b', 'z-ai/glm@5'],
+  F15: ['a{b', 'a}b', 'a[b', 'a,b', 'a=b', 'a$b', 'a;b', 'a|b', 'a&b', 'a%b', 'a#b', 'a?b', 'a+b', 'a*b', 'a<b'], F16: ['x'.repeat(129), `a/${'b'.repeat(127)}`],
+  F17: [7, null, [], {}, true],
+};
+
+// DoD 1 and D-2 (rule R-A): the full id goes to opencode as <provider>/<id>; the models key and name are the id as given.
+t('model-id: command passes the full id, -m <provider>/<id>, small_model <provider>/<id> and the id as the models key and name', () => {
+  for (const model of ['z-ai/glm-5.3', 'openai/gpt-x', 'anthropic/claude-x', 'gpt-x', 'a/b/c', 'Z-AI/GLM-5:free', '-x', '--x', '__proto__', 'x'.repeat(128)]) {
+    const result = command({ model });
+    assert.deepEqual(result.argv.slice(8, 10), ['-m', `openai/${model}`], model);
+    const config = parseJson(result.env.OPENCODE_CONFIG_CONTENT);
+    assert.equal(config.small_model, `openai/${model}`, model);
+    assert.deepEqual(config.enabled_providers, ['openai']);
+    assert.deepEqual(Object.keys(config.provider), ['openai']);
+    assert.deepEqual(config.provider.openai.options, { baseURL: INPUT.provider.baseUrl, apiKey: PLACEHOLDER });
+    assert.deepEqual(Object.keys(config.provider.openai.models), [model], model);
+    assert.ok(Object.hasOwn(config.provider.openai.models, model), `${model} is an own key`);
+    assert.deepEqual(config.provider.openai.models[model], { name: model, reasoning: true, options: { reasoningEffort: 'high' } }, model);
+  }
+});
+
 t('dod1-adapter: command refuses an input it cannot build a safe invocation from', () => {
   const refused = over => assert.notEqual(thrownOf(() => opencode.command({ ...INPUT, ...over })), null, JSON.stringify(over));
   refused({ provider: { ...INPUT.provider, id: 'other' } });
@@ -82,7 +106,7 @@ t('dod1-adapter: command refuses an input it cannot build a safe invocation from
   refused({ provider: { ...INPUT.provider, baseUrl: 'https://models.example.org:8080/v1' } });
   refused({ provider: { ...INPUT.provider, baseUrl: '' } });
   refused({ provider: undefined });
-  for (const model of ['', 'a b', 'a"b', 'a\nb', 'a/b', "a'b", undefined, 7]) refused({ model });
+  for (const model of [...Object.values(MODEL_REFUSED).flat(), undefined]) refused({ model });
   for (const effort of ['', 'High', 'hi gh', 'x1', undefined]) refused({ effort });
   for (const workdir of ['', 'relative/dir', undefined, '/a\nb']) refused({ workdir });
   for (const firstMessage of ['', undefined, 7]) refused({ firstMessage });

@@ -37,6 +37,20 @@ t('dry-run: prints one JSON plan, exits 0 and leaves nothing behind', () => with
   assert.equal(fs.existsSync(fx.writable.reportMd), false);
 }));
 
+// DoD 1 (rule R-A): --model z-ai/glm-5.3 with --provider openai is kept whole in the plan and reaches opencode as openai/z-ai/glm-5.3.
+t('dry-run: --model z-ai/glm-5.3 is the plan model and the agent command passes -m openai/z-ai/glm-5.3', () => withFixture({}, async fx => {
+  const result = await fx.run({ add: [['--provider', 'openai'], ['--model', 'z-ai/glm-5.3']] });
+  assert.equal(result.code, 0, result.stderr);
+  const plan = parseJson(result.stdout);
+  assert.equal(plan.model, 'z-ai/glm-5.3');
+  assert.deepEqual(JSON.parse(plan.launch.payload_files.agent['agent-command.json']).argv.slice(8, 10), ['-m', 'openai/z-ai/glm-5.3']);
+  const content = plan.launch.agent.create.find(entry => entry.startsWith('OPENCODE_CONFIG_CONTENT='));
+  const config = JSON.parse(content.slice('OPENCODE_CONFIG_CONTENT='.length));
+  assert.equal(config.small_model, 'openai/z-ai/glm-5.3');
+  assert.deepEqual(Object.keys(config.provider.openai.models), ['z-ai/glm-5.3']);
+  assert.equal(config.provider.openai.models['z-ai/glm-5.3'].name, 'z-ai/glm-5.3');
+}));
+
 const mountValues = args => args.flatMap((arg, index) => (args[index - 1] === '--mount' ? [arg] : []));
 const values = (args, flag) => args.flatMap((arg, index) => (args[index - 1] === flag ? [arg] : []));
 

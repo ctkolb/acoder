@@ -41,3 +41,8 @@ t('dod1-opencode: one command with flags only runs the real opencode to done; th
 t('dod1-opencode: --model and --effort override the defaults in every request', async t => {
   await runAndCheck(t, 'dod1-opencode overrides', { extraArgs: [['--model', 'gpt-override-1'], ['--effort', 'low']], model: 'gpt-override-1', effort: 'low' });
 });
+
+// v0.2.1 DoD 1, C-1 (rule R-A, RA-1): an OpenRouter-style id with a slash reaches the endpoint whole in every request opencode sends.
+t('dod1-opencode: --model z-ai/glm-5.3 names the full id in every request and in the record', async t => {
+  await runAndCheck(t, 'dod1-opencode slashed model', { extraArgs: [['--model', 'z-ai/glm-5.3']], model: 'z-ai/glm-5.3', effort: DEFAULT_EFFORT });
+});

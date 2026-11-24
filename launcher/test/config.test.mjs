@@ -82,6 +82,53 @@ t('dod1-config: through the command, --config supplies the endpoint and the mode
   await expectRefusal(fx, { deps: { adapters: { opencode: { providers: ['other'] } }, providers: { openai: {}, other: {} } } }, /opencode.*openai|openai.*opencode/);
 }));
 
+// DoD 1 and D-2 (rule R-A): a model id with slashes is accepted from the flag, the owner file and defaults.json and is kept whole.
+t('model-id: a slashed id is kept whole whatever its first segment, from the flag and from the owner file', () => withFixture({}, async fx => {
+  const resolve = (extra, owner = {}) => attempt(() => resolveSettings({ options: optionsFor(fx, extra), owner, defaults: DEFAULTS, ...registry })).model;
+  for (const model of ['z-ai/glm-5.3', 'openai/gpt-x', 'other/gpt-x', 'anthropic/claude-x', 'a/b/c']) {
+    assert.equal(resolve([['--provider', 'openai'], ['--model', model]]), model);
+    assert.equal(resolve([['--provider', 'other']], { model }), model);
+    assert.equal(resolve([], { provider: 'openai', model }), model);
+  }
+  assert.equal(resolve([]), 'gpt-6-luna');
+  assert.equal(attempt(() => resolveSettings({ options: optionsFor(fx), owner: {}, defaults: { ...DEFAULTS, model: 'z-ai/glm-5.3' }, ...registry })).model, 'z-ai/glm-5.3');
+}));
+
+t('model-id: through the command, "model": "z-ai/glm-5.3" in the --config file is accepted with --provider openai', () => withFixture({}, async fx => {
+  const file = path.join(fx.base, 'owner.json');
+  fs.writeFileSync(file, JSON.stringify({ model: 'z-ai/glm-5.3' }));
+  const result = await fx.run({ add: [['--provider', 'openai'], ['--config', file]] });
+  assert.equal(result.code, 0, result.stderr);
+  const plan = parseJson(result.stdout);
+  assert.equal(plan.model, 'z-ai/glm-5.3');
+  assert.equal(JSON.parse(plan.launch.payload_files.agent['agent-command.json']).argv[9], 'openai/z-ai/glm-5.3');
+  fs.writeFileSync(file, JSON.stringify({ model: 'z-ai/../glm' }));
+  await expectRefusal(fx, { add: [['--config', file]] }, /model/);
+}));
+
+// DoD 3: the forms F1-F17 of the plan sheet at the owner file loader and at defaults.json.
+const LOADER_REFUSED = {
+  F1: [''], F2: ['a b'], F3: ['a\tb', 'a\nb', 'a\rb'], F4: ['a\u0000b', 'a\u001bb', 'a\u007fb'], F5: ['glm‑5', 'é'], F6: ['a"b'], F7: ["a'b", 'a`b'], F8: ['a\\b'],
+  F9: ['a..b', 'z-ai/../x', '..'], F10: ['a/./b', './x', '.'], F11: ['/x'], F12: ['x/'], F13: ['a//b', '/'], F14: ['a@b', 'z-ai/glm@5'],
+  F15: ['a{b', 'a}b', 'a[b', 'a,b', 'a=b', 'a$b', 'a;b', 'a|b', 'a&b', 'a%b', 'a#b', 'a?b', 'a+b', 'a*b', 'a<b'], F16: ['x'.repeat(129), `a/${'b'.repeat(127)}`],
+  F17: [7, null, [], {}, true],
+};
+t('model-id: the owner file loader refuses every form F1-F17 and accepts -x, --x, __proto__ and 128 characters', () => withFixture({}, async fx => {
+  const file = path.join(fx.base, 'owner.json');
+  const load = model => { fs.writeFileSync(file, JSON.stringify({ model })); return attempt(() => loadOwnerConfig(file)); };
+  for (const [form, models] of Object.entries(LOADER_REFUSED)) {
+    for (const model of models) assert.match(String(load(model).thrown), /the owner configuration file: model has a value that is not allowed/, `${form} ${JSON.stringify(model)}`);
+  }
+  for (const model of ['-x', '--x', '__proto__', 'x'.repeat(128), 'z-ai/glm-5.3', 'Z-AI/GLM-5:free']) assert.deepEqual(load(model), { model });
+}));
+
+t('model-id: launcher/defaults.json is checked with the same rule', () => withFixture({}, async fx => {
+  const file = path.join(fx.base, 'defaults.json');
+  const load = model => { fs.writeFileSync(file, JSON.stringify({ ...DEFAULTS, model })); return attempt(() => loadDefaults(file)); };
+  assert.deepEqual(load('z-ai/glm-5.3'), { ...DEFAULTS, model: 'z-ai/glm-5.3' });
+  for (const model of ['a..b', 'a/./b', 'x'.repeat(129), 'a@b', '', 7]) assert.match(String(load(model).thrown), /defaults\.json: model/, JSON.stringify(model));
+}));
+
 // S2-AC3: no flag accepts a key value; the key is read only from the environment variable named by --api-key-env.
 t('key: an acceptable key passes from the default and from a named variable', () => withFixture({}, async fx => {
   assert.equal(attempt(() => checkApiKey(fx.env, 'ACODER_MODEL_API_KEY')), undefined);
