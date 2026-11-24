@@ -10,7 +10,7 @@ const NAME = /^[a-z0-9-]+$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const IMAGE = /^(?:[A-Za-z0-9][A-Za-z0-9._/:-]*@)?sha256:[0-9a-f]{64}$/;
 const MODEL = /^[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/;
-const MODEL_MAX = 128;
+const MODEL_MAX = 64;
 
 export function positiveInteger(value, label, maximum = Number.MAX_SAFE_INTEGER) {
   if (typeof value !== 'string' || !/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > maximum) {
@@ -42,7 +42,8 @@ export function checkEndpoint(value, label) {
 }
 
 // D-2 (rule R-A): a model id is opaque and sent to the provider as given; a "/" is part of it. One or more "/"-separated segments of
-// [A-Za-z0-9._:-], no ".." anywhere, no "." segment, 1 to 128 characters, so it cannot alter argv or the generated JSON configuration.
+// [A-Za-z0-9._:-], no ".." anywhere, no "." segment, 1 to 64 characters (D-3: the width at which the sidecar records the response model),
+// so it cannot alter argv or the generated JSON configuration.
 export const isModelId = value => typeof value === 'string' && value.length <= MODEL_MAX && MODEL.test(value) && !value.includes('..') && !value.split('/').includes('.');
 
 export function checkModelId(value, label) {

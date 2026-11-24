@@ -13,7 +13,7 @@ const FIXED_ENV = {
 };
 // D-2 (rule R-A): the same model id rule as launcher/lib/args.mjs, checked here on its own; the id is passed whole as <provider>/<id>.
 const MODEL = /^[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/;
-const isModelId = value => typeof value === 'string' && value.length <= 128 && MODEL.test(value) && !value.includes('..') && !value.split('/').includes('.');
+const isModelId = value => typeof value === 'string' && value.length <= 64 && MODEL.test(value) && !value.includes('..') && !value.split('/').includes('.');
 const EFFORT = /^[a-z]+$/;
 const nonEmpty = value => typeof value === 'string' && value !== '';
 
