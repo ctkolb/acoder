@@ -40,6 +40,9 @@ Tooling and process settings (defaults shown):
     no. Defaults: yes for LOW and STANDARD work; for HIGH work the first three are
     no unless you say otherwise. Rework (a rejected review report is fixed in the
     same reviewer session instead of a new ticket) is always on.
+  Reviewer dispatch: manual (the default) or container. For container, also give
+    "Container launcher: <command>", the model endpoint and the provider. The
+    orchestrator then prepares one launch command per reviewer ticket and you run it.
 
 -----------------------------------------------------------------------------
 TEMPLATE A: ROADMAP RUN (continue or start a release)
@@ -72,6 +75,7 @@ Verification entry point (run once per builder report, from the repository root)
 Report validator (the reviewer and the orchestrator run it on a review report):
   <command with its arguments> | none
 Review exports: git archive (never a git worktree) | <export tool command>
+Reviewer dispatch: manual | container (Container launcher: <command>; model endpoint; provider)
 Process options: Plan-first: yes | no.  Bundled review: yes | no.  Mechanical confirmation: yes | no.
 Where the rules live: <run sheet, plan and decisions locations; review cadence>
 Rules: <never push, publish, install or transmit; commit message trailer; style rules; local runtime notes>
@@ -120,6 +124,7 @@ Verification entry point (run once per builder report, from the repository root)
   <command with its arguments>
 Report validator: <command with its arguments> | none
 Review exports: git archive (never a git worktree) | <export tool command>
+Reviewer dispatch: manual | container (Container launcher: <command>; model endpoint; provider)
 Process options: Plan-first: yes | no.  Bundled review: yes | no.  Mechanical confirmation: yes | no.
 Rules: <never push, publish, install or transmit; commit message trailer; style rules; local runtime notes>
 

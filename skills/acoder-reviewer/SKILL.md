@@ -20,3 +20,7 @@ request requires the confirmation card and owner's yes before work.
 Keep the protocol's scope, evidence, isolation, reporting and stopping rules. Do
 not activate another role in this session. Configuration defaults do not supersede
 ticket limits or expand authorization.
+
+An opt-in container launcher may start this session unattended. Its first message
+is then the owner's TICKET pointer. The protocol's CONTAINER MODE section says
+when that mode applies and what changes; outside it every rule is unchanged.

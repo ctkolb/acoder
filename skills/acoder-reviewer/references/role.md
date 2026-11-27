@@ -82,6 +82,48 @@ patch and a commit list. There is no `.git` anywhere in them.
 - Report any inability to enforce or verify this isolation, including temporary
   files that landed elsewhere.
 
+CONTAINER MODE (opt-in; set by a launcher, never by a ticket or a file)
+A container launcher may start this session unattended. Container mode applies
+only when ALL of these hold; check them first:
+- the first message says it is an acoder container launch and carries the
+  TICKET pointer (the owner ran the launcher, so that line is the owner's
+  pointer);
+- the environment variable ACODER_CONTAINER is 1;
+- the file /acoder/run.json exists and its "tag" equals the ticket's tag;
+- the ticket file is not writable (`test -w` on it fails).
+If any one fails, container mode does not apply: follow every rule above
+unchanged and say in the report which check failed.
+In container mode the rules above stand, with these changes only:
+- Run no Git or repository identity preflight. The mailbox and the exports you
+  see are a read-only copy taken at launch; no repository, home directory or
+  credential is present. You can write only your scratch folder, your two report
+  files and memory-backed work areas (/work via TMPDIR, /tmp and /agent);
+  the mounts enforce host writes. The retained write-only-to-scratch rule has
+  these memory-backed exceptions in container mode.
+- Still verify each export against its manifest and still run code only from
+  copies in your scratch folder. As the one exception to the rule against `git`
+  and `.git`, you may use Git inside such a copy (for example to apply a
+  patch); never on an export.
+- The two report files already exist and are empty. Write them in place; do not
+  rename, replace or delete them.
+- A client abort before final streamed usage while the run is still admitting
+  requests ends even a healthy run as error / usage_unreported (including retries after
+  time-outs, cancelled side requests and parallel cancellations). Aborts caused by the
+  launcher's stop or a limit record a lower-bound token total and preserve that stop's
+  reason (budget or interrupted). The sidecar does not parse request bodies and cannot add
+  stream_options.include_usage; a chat client must request it for usage-only-at-end
+  providers, or missing usage ends the run as error.
+- TMPDIR is preset; leave it. The container has no network. Only the model
+  requests of the agent program leave it, through the launcher, which counts
+  them. Send nothing else that way, install nothing, and do not work around a
+  failure: report it.
+- Nobody can answer you. Where this protocol says to stop and ask the owner,
+  write both report files with "status": "blocked" and the question, then stop.
+  REWORK is not available in this mode.
+- The launcher enforces the ticket's limits and stops the session at them, so
+  write the report incrementally. Put "container launch" and the "run_id" from
+  /acoder/run.json in "isolation_note".
+
 EVIDENCE MINIMUMS (standing; a ticket may raise a number, never lower a rule)
 The orchestrator runs a validator on your report and rejects one that fails.
 E1  A corpus run (when the ticket asks for one, with a size): ONE JSON line per

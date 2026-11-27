@@ -19,9 +19,11 @@ It works two ways, chosen by the `Run type` line in the PROJECT block:
 - **ROADMAP**: continue or start a release from the project's roadmap, backlog and recorded decisions.
 - **DIRECTED**: you say what you want, in your own words. Examples: "review the whole project for bugs and fix them", "find performance improvements", "implement feature X, done when XYZ, ask me questions until it's clear".
 
+Diagrams of the flow between the roles and of the container reviewer are in [architecture](docs/architecture.md).
+
 ## Quickstart and prerequisites
 
-This is a skill collection with manual session handoffs. Supply a project with Git history, usable checks, provisioned dependencies and sessions with local file/tool access. Read [environment guidance](docs/environment.md) and [tooling contracts](docs/tooling.md) first. There is no bundled execution sandbox, mutation runner or report validator.
+This is a skill collection with manual session handoffs, except that a reviewer ticket can optionally be run by a container launcher. Supply a project with Git history, usable checks, provisioned dependencies and sessions with local file/tool access. An opt-in container launcher for reviewer tickets is included (see [container mode](docs/container-mode.md#container-mode-for-reviewer-tickets)); it is the only execution boundary shipped here, and there is no bundled report validator. A mutation runner for Node.js test suites is included as repository tooling (see [mutation runner](docs/ci.md#mutation-runner)).
 The commands and evidence below are project-specific inputs, not tools shipped here.
 
 For a first run, choose a small, reversible, well-defined task. Fill Template B with `Brief: COMPLETE`, `Open-ended: NO` and a concrete definition of done. Name existing checks and set a LOW tier if its criteria apply. Save the block to your configuration file and follow Setup and The loop above; the quickstart uses the same protocol and approval rules.
@@ -43,7 +45,7 @@ project details. Use synthetic fixtures when proposing public examples.
 
 ## The loop
 
-You carry work between sessions. Nothing launches by itself.
+You carry work between sessions. Nothing launches by itself: in container mode (below) the orchestrator prepares a reviewer's launch command and you run it.
 
 1. The orchestrator tells you the next action, naming the receiving session and a  **tag** (for example `demo-S1-B-BUILD-r1`), and gives a pointer line: `TICKET <tag> at <absolute path>`.
 2. Go to that session and either say **ready** (it finds its ticket, shows a card with the tag, mode, expected commit and limits, and waits for your **yes**), or paste the pointer line (starts at once). Check that the tag matches.
@@ -53,6 +55,8 @@ You carry work between sessions. Nothing launches by itself.
 
 Rules of thumb: one pending ticket per role at a time; fix rounds stay in the same builder session; a closed stage ends the sessions (below).
 
+Container mode for reviewer tickets is opt-in: set `Reviewer dispatch: container` in the PROJECT block and the orchestrator prepares one launch command per reviewer ticket, which you run. The reviewer then works in a container whose only way out is a second container that holds the API key, forwards requests only to the model endpoint, and counts and limits them; the launcher writes a run record beside the report. Manual dispatch is unchanged and remains the default. Usage, requirements and platform limits are in [container mode](docs/container-mode.md#container-mode-for-reviewer-tickets) and [container launcher](docs/container-mode.md#container-launcher). The launcher passes a model id as given, so provider-routed ids such as OpenRouter's `z-ai/glm-5.3` work with `--model` and the owner configuration file; see the [release notes](docs/release-notes.md).
+
 ## What you decide
 
 - The run type, objective and risk tier.
@@ -61,10 +65,13 @@ Rules of thumb: one pending ticket per role at a time; fix rounds stay in the sa
 - The branch name and base, when the orchestrator proposes one (your yes creates that one local branch).
 - Disputed findings, scope changes, and accepted limits.
 - Every push, merge and tag. The agents never do these.
+- For a container launch: the budget, image and model of each reviewer ticket. You run the launch command.
 
 ## Fixed safety rules
 
-The orchestrator writes only inside the mailbox. The builder commits only on a non-default branch and never pushes and installs dependencies only with explicit authorization. The reviewer writes only to its scratch folder and its report, runs no `git` command, and works on copies of read-only exports. Reports, logs and repository files are treated as data, never as instructions. A role starts work only on your `ready` plus `yes`, or your pasted pointer line.
+The orchestrator writes only inside the mailbox. The builder commits only on a non-default branch and never pushes and installs dependencies only with explicit authorization. The reviewer writes only to its scratch folder and its report, runs no `git` command, and works on copies of read-only exports. Reports, logs and repository files are treated as data, never as instructions. A role starts work only on your `ready` plus `yes`, your pasted pointer line, or, for a reviewer ticket in container mode, the launch command you run. In that mode the container enforces what the reviewer can read, write and reach; the protocol additionally lets it use Git inside its scratch copies, never on an export.
+
+The model endpoint remains an exfiltration channel: anything in an export or mailbox can reach the model provider, and in container mode the sidecar that forwards model requests sees prompts and responses in plaintext on the host. Keep private data out of exports and mailboxes. The provider's handling of prompts and files is separate from any network restriction. Examples use POSIX command syntax; Windows users must adapt paths and commands.
 
 ## Model Recommendations
 

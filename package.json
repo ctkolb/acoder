@@ -2,6 +2,9 @@
   "name": "acoder-checks",
   "private": true,
   "type": "module",
+  "bin": {
+    "acoder": "launcher/bin/acoder.mjs"
+  },
   "engines": {
     "node": ">=22"
   },
@@ -9,7 +12,10 @@
     "check": "npm run lint:markdown && npm run validate && npm test && npm run lint:workflows",
     "lint:markdown": "markdownlint-cli2",
     "validate": "node scripts/validate.mjs",
-    "test": "node --test scripts/*.test.mjs",
+    "test": "node --test scripts/*.test.mjs launcher/test/*.test.mjs",
+    "mutants": "node scripts/mutants.mjs",
+    "check:container": "node launcher/test/helpers/require-container.mjs && node --test launcher/test/*.container.test.mjs",
+    "test:container:cleanup": "node launcher/test/helpers/cleanup-containers.mjs",
     "hooks:install": "node scripts/install-hooks.mjs",
     "lint:workflows": "go -C tools run github.com/rhysd/actionlint/cmd/actionlint"
   },

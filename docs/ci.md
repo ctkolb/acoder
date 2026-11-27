@@ -20,7 +20,8 @@ runner supplies Go. npm dependencies
 are pinned in `package-lock.json`. Installation does not run dependency scripts.
 
 Individual checks are available as `npm run lint:markdown`, `npm run validate`,
-`npm test`, and `npm run lint:workflows`.
+`npm test`, and `npm run lint:workflows`. `npm run check:container` is a separate
+command for the container tests (see below).
 
 ## What is checked
 
@@ -44,12 +45,44 @@ Individual checks are available as `npm run lint:markdown`, `npm run validate`,
 - Regression tests that deliberately break links, packages, metadata, reports
   and ticket history to verify that the checks reject them.
 - GitHub Actions workflow syntax and expressions through actionlint.
+- The mutation runner's own tests: a known kill, a survivor, the neutral control and
+  the INVALID cases (missing anchor, load error, zero or skipped tests, timeout).
+- The container launcher's unit tests: arguments, path, home and mailbox rules, the
+  input copy, manifest checks, the request forwarder's admission and counting, the
+  run record, key redaction and the agent and provider interfaces. These need no
+  container runtime.
 
 The example checker is specific to the shipped S1 walkthrough. It never executes
 commands from reports or resolves hypothetical mailbox/scratch evidence. It is
-not the production report validator described in [tooling contracts](tooling.md),
+not a production report validator; this project ships none,
 and passing CI does not establish that evidence is true or prompts behave as
 intended. Agent behavior evaluations and semantic protocol review remain separate.
+
+## Container tests
+
+The launcher's isolation, network, mailbox, budget and credential tests start
+containers. They run only when a container runtime answers and `ACODER_TEST_IMAGE`
+names a digest-pinned image that is already on the host; tests of the agent program
+also need `ACODER_TEST_AGENT_IMAGE`. Nothing pulls or builds an image. The tests use
+synthetic fixtures in a temporary directory, a local stub endpoint and networks
+without outside access.
+
+In `npm run check` a container test that cannot run is reported as skipped, with
+the reason; it never counts as passed. `npm run check:container` requires them: it
+prints `NOT_CHECKED` with the reason and fails when the runtime or the image is
+missing. CI does not run the container tests, because the hosted runner would need an
+image pull; Linux and Podman are therefore not covered by this project's tests.
+
+## Mutation runner
+
+`npm run mutants -- --mutants <file> --out <file>` runs mutation testing for suites
+run with `node --test`. Each mutation names a file, a unique anchor, a replacement,
+its test modules, an expected outcome and a rationale; each mutation's modules are
+test files. The runner first runs a passing unmodified baseline with a nonzero test
+count, then applies each mutation in its own disposable copy. A run with a missing
+anchor, a skipped test, a load error, fewer tests than the baseline or a timeout is
+INVALID. The runner adds a neutral control and writes one JSON result file. It is
+repository tooling; other projects name their own runner in the PROJECT block.
 
 ## Secret and privacy scan in CI
 
